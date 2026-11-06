@@ -31,6 +31,7 @@ enum NativeEverydayScenes {
         default: view = nil
         }
         view?.frame = frame
+        view?.accessibilityIdentifier = "native-scene-"+mode
         view?.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         return view
     }
@@ -160,7 +161,7 @@ private final class NativePhotoZoomView: UIView, UIScrollViewDelegate {
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
-    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImageIfNeeded() }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImageIfNeeded();scrollView.accessibilityValue=String(format:"scale %.2f",Double(scrollView.zoomScale)) }
 
     private func centerImageIfNeeded() {
         let horizontal = max(0, (bounds.width - imageView.frame.width) / 2)
@@ -431,7 +432,7 @@ private final class NativeVideoView: UIView, NativeSceneLifecycle {
             let fallback = folder.appendingPathComponent("flower-cc0.mp4")
             if FileManager.default.fileExists(atPath: fallback.path) { urls = [fallback] }
         }
-        load(index: 0, autoplay: false)
+        load(index: 0, autoplay: true)
     }
 
     required init?(coder: NSCoder) { nil }

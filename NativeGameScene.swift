@@ -99,6 +99,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
     private func add(_ key: String, _ title: String, symbol: String?, size: CGFloat, kind: NativeHUDControl.Kind = .circle) {
         let control = NativeHUDControl(title: title, symbol: symbol, kind: kind)
         control.accessibilityIdentifier = "game-control-\(key)"
+        control.isAccessibilityElement = true
         control.accessibilityLabel = title.isEmpty ? "移动轮盘" : title
         control.bounds = CGRect(x: 0, y: 0, width: size, height: kind == .bar ? 28 : size)
         control.isUserInteractionEnabled = false
@@ -196,7 +197,9 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
     private func startTimer() {
         guard timer == nil else { return }
         lastTick = CACurrentMediaTime()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
     private func clearPressed() {
         roles.removeAll(); previous.removeAll(); pressed.removeAll(); castVectors.removeAll(); cancelledCasts.removeAll()

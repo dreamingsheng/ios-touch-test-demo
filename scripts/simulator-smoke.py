@@ -61,9 +61,9 @@ for device in selected:
         cases = [(False, mode, False) for mode in modes] + [(True, mode, False) for mode in modes]
         # Automatic game entry must request landscape itself, separately from
         # explicitly rotated portrait/landscape compatibility checks.
-        cases += [(True, 'moba', True), (True, 'aim', True)]
-        for landscape, mode, automatic in cases:
-            sequence = ('automatic-' if automatic else '')+('landscape' if landscape else 'portrait')+'-'+mode
+        cases += [(False, 'multi', False), (True, 'moba', True), (False, 'multi', False), (True, 'aim', True)]
+        for case_index, (landscape, mode, automatic) in enumerate(cases):
+            sequence = f'{case_index:02d}-'+('automatic-' if automatic else '')+('landscape' if landscape else 'portrait')+'-'+mode
             (documents / 'smoke-command.json').write_text(json.dumps({'sequence': sequence, 'mode': mode, 'orientation': 'automatic' if automatic else ('landscape' if landscape else 'portrait')}))
             layout = None
             last_observed = None

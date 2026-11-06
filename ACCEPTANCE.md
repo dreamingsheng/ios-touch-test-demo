@@ -25,7 +25,11 @@ This ledger preserves the requested scope. It does not turn browser or simulator
 
 ## Not yet established
 
-1. All 21 native scene screenshots passing on each of the three selected simulator categories.
+The user's new acceptance correction supersedes the earlier IPA architecture: the IPA must be a normal native application, with an edge-to-edge test surface, no top/bottom letterboxing, default landscape game entry, a floating joystick, movable HUD/menu and saved positions. The 4.0 source now uses UIKit/AVFoundation throughout the main 21-scene entry. Its build/simulator/device evidence must be obtained independently; the old 3.0 checks do not prove the native replacement.
+
+Web v13 is a separate deliverable. Its 25-check CDP regression passed, including a full-window canvas, safe floating controls, real two-finger floating joystick operation, HUD editing/persistence and all project-menu entries. This evidence applies to Chromium emulation only.
+
+1. The new 4.0 native build, all 21 native scene screenshots on each of the three simulator categories, actual hidden status bar, full-window canvas and automatic game landscape entry.
 2. Visual comparison against agreed, version-specific original screens for a one-to-one claim. Generated game backgrounds, a fictitious offline map and local sample video are not originals of the referenced commercial applications.
 3. Physical-device fullscreen, keyboard, exported-file handling, simultaneous finger behavior, interruption recovery and the user's reported border/occlusion issue.
 4. A verified result for every supported physical model and iOS version. Current deployment target is iOS 16+, not every historical iPhone.

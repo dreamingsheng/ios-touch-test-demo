@@ -16,6 +16,7 @@ on:
       - 'TouchTestApp.xcscheme'
       - 'docs/**'
       - 'scripts/**'
+      - 'uitests/**'
       - '.github/workflows/build-ios.yml'
 
 permissions:
@@ -94,9 +95,32 @@ jobs:
           path: simulator-evidence/
           if-no-files-found: warn
 
+  native-ui:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore native UI test project
+        run: |
+          mkdir -p TouchTestApp TouchTestApp.xcodeproj/xcshareddata/xcschemes
+          mv TouchTestApp.swift TouchTestView.swift Native*.swift TouchTestApp/
+          cp -R docs TouchTestApp/Web
+          mv project.pbxproj TouchTestApp.xcodeproj/
+          mv TouchTestApp.xcscheme TouchTestApp.xcodeproj/xcshareddata/xcschemes/
+          python3 scripts/add-ui-test-target.py
+      - name: Test actual native gestures and controls
+        run: python3 scripts/run-native-ui-tests.py
+      - name: Upload native UI test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ui-results
+          path: native-ui-results.xcresult/
+          if-no-files-found: warn
+
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.publish
-    needs: [build, smoke]
+    needs: [build, smoke, native-ui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

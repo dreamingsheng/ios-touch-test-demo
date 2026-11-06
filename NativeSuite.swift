@@ -48,7 +48,12 @@ final class NativeSuiteController: UIViewController {
         metrics.textColor = .white
         metrics.isHidden = true
         metrics.isUserInteractionEnabled = false
-        showMode("multi", automaticOrientation: false)
+        metrics.accessibilityIdentifier = "native-metrics"
+        let arguments=ProcessInfo.processInfo.arguments
+        metrics.isHidden = !arguments.contains("--ui-testing")
+        let startIndex=arguments.firstIndex(of:"--native-mode")
+        let initial=startIndex.flatMap{ $0+1<arguments.count ? arguments[$0+1] : nil } ?? "multi"
+        showMode(initial, automaticOrientation: false)
         clock = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
             if let surface = self.scene as? NativeDiagnosticSurface { self.metrics.text = surface.diagnostics }
@@ -76,6 +81,7 @@ final class NativeSuiteController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         setNeedsStatusBarAppearanceUpdate(); setNeedsUpdateOfHomeIndicatorAutoHidden()
+        if ["moba","aim"].contains(mode) {requestOrientation(true)}
     }
     private func showMode(_ next: String, automaticOrientation: Bool = true) {
         guard Self.modes.contains(where: { $0.0 == next }) else { return }
@@ -140,7 +146,7 @@ final class NativeSuiteController: UIViewController {
             let report=surface.report()
             let data:Data
             if format=="csv" {
-                let keys=["mode","phase","id","timestamp","x","y","force","maximumPossibleForce","majorRadius","source","coalescedBatch"]
+                let keys=["mode","phase","id","timestamp","x","y","force","maximumPossibleForce","majorRadius","source","coalescedBatch","stageWidth","stageHeight"]
                 let rows=report["samples"] as? [[String:Any]] ?? []
                 let csv=keys.joined(separator:",")+"\r\n"+rows.map{ row in keys.map{ key in "\""+String(describing:row[key] ?? "").replacingOccurrences(of:"\"",with:"\"\"")+"\"" }.joined(separator:",") }.joined(separator:"\r\n")
                 data=Data(csv.utf8)
@@ -198,8 +204,10 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
     private var nextID=1
     private var active:[Int:CGPoint]=[:]
     private var radii:[Int:CGFloat]=[:]
-    private var paths:[Int:[CGPoint]]=[:]
-    private var pathPointCount=0
+    private var livePaths:[Int:UIBezierPath]=[:]
+    private var livePointCount=0
+    private var trailImage:UIImage?
+    private var canvasSize=CGSize.zero
     private var axisTouch:Int?,cursorTouch:Int?
     private var cursorPoint=CGPoint.zero
     private var sampleRows:[[String:Any]]=[]
@@ -219,11 +227,14 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
         backgroundColor = .black; isOpaque=true; isMultipleTouchEnabled=true
         if mode=="colors" { solid=1 }
         accessibilityIdentifier="native-scene-"+mode
+        isAccessibilityElement=true
+        accessibilityLabel=NativeSuiteController.modes.first(where:{$0.0==mode})?.1 ?? mode
+        accessibilityTraits = .allowsDirectInteraction
         let timer=Timer(timeInterval:mode=="auto" ? 1.0/60 : 0.1,repeats:true) { [weak self] _ in self?.tick() }
         self.timer=timer;RunLoop.main.add(timer,forMode:.common)
     }
     required init?(coder:NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func layoutSubviews() { super.layoutSubviews(); if target == .zero || !bounds.contains(target) { target=CGPoint(x:bounds.midX,y:bounds.midY) };if cursorPoint == .zero {cursorPoint=CGPoint(x:bounds.width*0.75,y:bounds.midY)}; setNeedsDisplay() }
+    override func layoutSubviews() { super.layoutSubviews();if canvasSize != bounds.size {canvasSize=bounds.size;trailImage=nil;livePaths.removeAll();livePointCount=0}; if target == .zero || !bounds.contains(target) { target=CGPoint(x:bounds.midX,y:bounds.midY) };if cursorPoint == .zero {cursorPoint=CGPoint(x:bounds.width*0.75,y:bounds.midY)}; setNeedsDisplay() }
     var diagnostics:String {
         let elapsed=ProcessInfo.processInfo.systemUptime-started
         switch mode {
@@ -265,8 +276,14 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
             let delivered=phase=="move" ? (event?.coalescedTouches(for:touch) ?? [touch]) : [touch]
             for sample in delivered.sorted(by:{$0.timestamp<$1.timestamp}) {
                 let point=sample.location(in:self);total += 1;eventCount += 1
-                if sampleRows.count<10000 { sampleRows.append(["mode":mode,"phase":phase,"id":id,"timestamp":sample.timestamp,"x":point.x,"y":point.y,"force":sample.force,"maximumPossibleForce":sample.maximumPossibleForce,"majorRadius":sample.majorRadius,"source":"UITouch","coalescedBatch":delivered.count>1]) }
-                if ["multi","draw","line"].contains(mode) && pathPointCount<10000 { paths[id,default:[]].append(point);pathPointCount += 1 }
+                active[id]=point
+                if sampleRows.count<10000 { sampleRows.append(["mode":mode,"phase":phase,"id":id,"timestamp":sample.timestamp,"x":point.x,"y":point.y,"force":sample.force,"maximumPossibleForce":sample.maximumPossibleForce,"majorRadius":sample.majorRadius,"source":"UITouch","coalescedBatch":delivered.count>1,"stageWidth":bounds.width,"stageHeight":bounds.height]) }
+                if ["multi","draw","line"].contains(mode) {
+                    let path=livePaths[id] ?? UIBezierPath()
+                    if path.isEmpty {path.append(UIBezierPath(ovalIn:CGRect(x:point.x-2,y:point.y-2,width:4,height:4)));path.move(to:point)} else {path.addLine(to:point)}
+                    livePaths[id]=path;livePointCount += 1
+                    if livePointCount>=1000 {flattenTrails()}
+                }
                 if mode=="grid" { let x=min(11,max(0,Int(point.x/max(1,bounds.width)*12))),y=min(23,max(0,Int(point.y/max(1,bounds.height)*24)));covered.insert(y*12+x) }
                 if mode=="edge" { markEdges(point) }
                 if mode=="line" { markLine(point) }
@@ -277,6 +294,18 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
             else { active[id]=p;radii[id]=touch.majorRadius }
         }
         setNeedsDisplay()
+    }
+    private func strokeTrails() {
+        for (id,path) in livePaths {colors[(id-1)%colors.count].setStroke();path.lineWidth=mode=="draw" ? 5 : 2;path.lineCapStyle = .round;path.lineJoinStyle = .round;path.stroke()}
+    }
+    private func flattenTrails() {
+        guard bounds.width>0,bounds.height>0 else{return}
+        let format=UIGraphicsImageRendererFormat();format.opaque=false;format.scale=window?.screen.scale ?? UIScreen.main.scale
+        trailImage=UIGraphicsImageRenderer(size:bounds.size,format:format).image{_ in trailImage?.draw(in:bounds);strokeTrails()}
+        livePaths.removeAll();livePointCount=0
+        // Continue at the actual last delivered position without inventing a
+        // straight segment between unrelated fingers or across cancelled input.
+        for (id,p) in active {let path=UIBezierPath();path.move(to:p);livePaths[id]=path}
     }
     private func randomTarget() { target=CGPoint(x:CGFloat.random(in:45...max(45,bounds.width-45)),y:CGFloat.random(in:60...max(60,bounds.height-45))) }
     private func markEdges(_ p:CGPoint) {
@@ -296,7 +325,7 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
         if mode=="grid" { for i in 0..<288 { let r=CGRect(x:CGFloat(i%12)*bounds.width/12,y:CGFloat(i/12)*bounds.height/24,width:bounds.width/12,height:bounds.height/24);(covered.contains(i) ? UIColor.systemGreen : UIColor(white:0.08,alpha:1)).setFill();c.fill(r);UIColor.darkGray.setStroke();c.stroke(r,width:0.5) } }
         if mode=="edge" {for i in 0..<80 {let n=CGFloat(i%20);let r:CGRect;switch i/20 {case 0:r=CGRect(x:n*bounds.width/20,y:0,width:bounds.width/20,height:20);case 1:r=CGRect(x:n*bounds.width/20,y:bounds.height-20,width:bounds.width/20,height:20);case 2:r=CGRect(x:0,y:n*bounds.height/20,width:20,height:bounds.height/20);default:r=CGRect(x:bounds.width-20,y:n*bounds.height/20,width:20,height:bounds.height/20)};(edges.contains(i) ? UIColor.systemGreen : .darkGray).setFill();c.fill(r.insetBy(dx:0.5,dy:0.5))} }
         if mode=="line" {c.setStrokeColor(UIColor.darkGray.cgColor);c.setLineWidth(16);c.setLineDash(phase:0,lengths:[12,9]);for pair in [(CGPoint(x:0,y:bounds.midY),CGPoint(x:bounds.width,y:bounds.midY)),(CGPoint(x:bounds.midX,y:0),CGPoint(x:bounds.midX,y:bounds.height)),(CGPoint(x:0,y:bounds.height*0.18),CGPoint(x:bounds.width,y:bounds.height*0.82))] {c.move(to:pair.0);c.addLine(to:pair.1);c.strokePath()};c.setLineDash(phase:0,lengths:[]) }
-        for (id,points) in paths {guard let first=points.first else{continue};c.setStrokeColor(colors[(id-1)%colors.count].cgColor);c.setLineWidth(mode=="draw" ? 5 : 2);c.setLineCap(.round);c.move(to:first);for p in points.dropFirst(){c.addLine(to:p)};c.strokePath();if points.count==1 {c.setFillColor(colors[(id-1)%colors.count].cgColor);c.fillEllipse(in:CGRect(x:first.x-2,y:first.y-2,width:4,height:4))}}
+        trailImage?.draw(in:bounds);strokeTrails()
         if ["tap","auto","hold"].contains(mode) {let p=mode=="hold" ? CGPoint(x:bounds.midX,y:bounds.midY) : target;c.setStrokeColor(UIColor.white.cgColor);c.setLineWidth(2);c.strokeEllipse(in:CGRect(x:p.x-28,y:p.y-28,width:56,height:56))}
         for (id,p) in active {
             let color=colors[(id-1)%colors.count];c.setStrokeColor(color.cgColor);c.setLineWidth(1);c.move(to:CGPoint(x:0,y:p.y));c.addLine(to:CGPoint(x:bounds.width,y:p.y));c.move(to:CGPoint(x:p.x,y:0));c.addLine(to:CGPoint(x:p.x,y:bounds.height));c.strokePath()
