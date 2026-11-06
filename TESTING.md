@@ -27,11 +27,13 @@ node tests/browser-regression.cjs
 
 ## IPA 云端检查
 
-工作流 `build-ios.yml` 先编译真机与模拟器产品，再读取成品 Info.plist 和 Web 资源。`scripts/verify-ios-bundle.py` 核对 iPhone/iPad 家族、四方向、全屏设置及全部离线资源哈希。`scripts/simulator-smoke.py` 在当次 runner 实际提供的两种 iPhone、一种 iPad 上启动 App，检查进程存活，保存普通/横屏截图并核对横屏图片方向。具体机型及像素尺寸写入 `simulator-evidence/results.json`，不是预先声称全机型通过。
+工作流 `build-ios.yml` 编译真机与模拟器产品。`scripts/verify-ios-bundle.py` 核对成品 iPhone/iPad 家族、四方向、全屏设置、原生入口及 Media 资源哈希，并确认没有 HTML 测试应用。`scripts/simulator-smoke.py` 在两种 iPhone、一种 iPad 上打开全部 21 场景的横竖屏，并从竖屏实际进入两种游戏验证自动横屏，共 46 例/设备。
 
-完整场景为本地 WKWebView，原生六项为 UIKit/SwiftUI。内置页面从 UIKit 接收安全区；报告导出经 WKScriptMessageHandler 交给系统分享面板，iPad 设置弹出锚点。所有这些仍需要目标真机进行触控、分享与键盘验收。
+4.1 主界面使用 UIKit/AVFoundation，不包含 WKWebView。截图边界验收读取 UIView 转换到 UIWindow 后的真实矩形、系统状态栏隐藏状态、悬浮项目/清除按钮安全位置。原始 simctl PNG 可能按物理设备方向存储；方向判断使用实际 UIWindowScene，阅图预览只旋转/缩小副本。机型和像素尺寸写入 `simulator-evidence/results.json`，不能预先声称全机型通过。
 
-这些断言验证网页逻辑和基本布局，不能证明 iOS 系统状态栏、键盘、手势优先级或真实传感器正常。
+`uitests/NativeSuiteUITests.swift` 通过 XCTest 真实执行拖划、双指、清除、图片更换与复位、上下阅读、开关/滑杆、系统键盘、自动横屏及 HUD 拖动保存。UI 测试目标由标准库脚本在 CI 临时工程中生成，不影响安装包工程。结果保存在 `native-ui-results`；必须检查实际执行数量与失败，而不只看构建是否成功。
+
+浏览器回归验证网页逻辑；原生模拟器和 XCTest 验证对应 UIKit 布局与输入操作。它们都不能替代目标实体机的触控硬件、多指上限、系统手势及文件分享验收。
 
 ## iPhone 人工验收（需要在目标设备上执行）
 
