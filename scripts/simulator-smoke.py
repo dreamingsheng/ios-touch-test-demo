@@ -25,14 +25,20 @@ assert len(phones) >= 2 and tablets, 'Need at least two iPhone models and one iP
 small = next((d for d in phones if any(n in d['name'] for n in ['SE', 'mini', '16e'])), phones[0])
 large = next((d for d in phones if 'Max' in d['name'] and d['udid'] != small['udid']),
              next(d for d in phones if d['udid'] != small['udid']))
-selected = [small, large, tablets[0]]
+categories = {'small': small, 'large': large, 'tablet': tablets[0]}
+selected = [categories[sys.argv[2]]] if len(sys.argv) > 2 else list(categories.values())
 evidence = []
 for device in selected:
     udid = run('xcrun', 'simctl', 'create', 'TouchTest-'+device['name'], device['deviceTypeIdentifier'], device['runtime']).strip()
     try:
         print('Booting fresh simulator: '+device['name'], flush=True)
         run('xcrun', 'simctl', 'boot', udid)
-        run('xcrun', 'simctl', 'bootstatus', udid, '-b')
+        try:
+            run('xcrun', 'simctl', 'bootstatus', udid, '-b')
+        except subprocess.TimeoutExpired:
+            # Observe the same cold-booting device again; do not restart it on a timeout.
+            print('Cold boot still pending; rechecking same simulator '+udid, flush=True)
+            run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
         run('xcrun', 'simctl', 'install', udid, str(app))
         for landscape in [False, True]:
             container = pathlib.Path(run('xcrun', 'simctl', 'get_app_container', udid, bundle, 'data').strip())

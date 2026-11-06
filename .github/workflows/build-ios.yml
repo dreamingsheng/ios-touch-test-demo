@@ -24,74 +24,86 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Restore Xcode project layout
         run: |
-          mkdir -p TouchTestApp
-          mkdir -p TouchTestApp.xcodeproj/xcshareddata/xcschemes
-          mv TouchTestApp.swift TouchTestApp/
-          mv TouchTestView.swift TouchTestApp/
+          mkdir -p TouchTestApp TouchTestApp.xcodeproj/xcshareddata/xcschemes
+          mv TouchTestApp.swift TouchTestView.swift TouchTestApp/
           cp -R docs TouchTestApp/Web
           mv project.pbxproj TouchTestApp.xcodeproj/
           mv TouchTestApp.xcscheme TouchTestApp.xcodeproj/xcshareddata/xcschemes/
-
-      - name: Build without code signing
+      - name: Build universal device app
         run: |
-          xcodebuild \
-            -project TouchTestApp.xcodeproj \
-            -scheme TouchTestApp \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
-            clean build
-
-      - name: Verify universal app and bundled scenarios
-        run: |
-          python3 scripts/verify-ios-bundle.py build/Build/Products/Release-iphoneos/TouchTestApp.app
-
-      - name: Build simulator app
-        run: |
-          xcodebuild -project TouchTestApp.xcodeproj -scheme TouchTestApp \
-            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath simulator-build CODE_SIGNING_ALLOWED=NO build
-
-      - name: Smoke test iPhone and iPad simulators
-        run: python3 scripts/simulator-smoke.py simulator-build/Build/Products/Release-iphonesimulator/TouchTestApp.app
-
-      - name: Upload simulator evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: simulator-evidence
-          path: simulator-evidence/
-          if-no-files-found: warn
-
+          xcodebuild -project TouchTestApp.xcodeproj -scheme TouchTestApp -configuration Release \
+            -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" CURRENT_PROJECT_VERSION=${{ github.run_number }} clean build
+      - name: Verify compiled bundle and offline assets
+        run: python3 scripts/verify-ios-bundle.py build/Build/Products/Release-iphoneos/TouchTestApp.app
       - name: Package unsigned IPA
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/TouchTestApp.app Payload/
           ditto -c -k --sequesterRsrc --keepParent Payload TouchTestApp-unsigned.ipa
           shasum -a 256 TouchTestApp-unsigned.ipa > TouchTestApp-unsigned.ipa.sha256
-
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: TouchTestApp-unsigned
           path: |
             TouchTestApp-unsigned.ipa
             TouchTestApp-unsigned.ipa.sha256
           if-no-files-found: error
+      - name: Build simulator app
+        run: |
+          xcodebuild -project TouchTestApp.xcodeproj -scheme TouchTestApp -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath simulator-build CODE_SIGNING_ALLOWED=NO build
+          ditto -c -k --keepParent simulator-build/Build/Products/Release-iphonesimulator/TouchTestApp.app TouchTestApp-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulator-app
+          path: TouchTestApp-simulator.zip
+          if-no-files-found: error
 
-      - name: Publish latest test IPA
+  smoke:
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [small, large, tablet]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: simulator-app
+      - name: Restore simulator bundle
+        run: ditto -x -k TouchTestApp-simulator.zip simulator
+      - name: Validate real scene orientation and safe frame
+        run: python3 scripts/simulator-smoke.py simulator/TouchTestApp.app ${{ matrix.device }}
+      - name: Upload simulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-evidence-${{ matrix.device }}
+          path: simulator-evidence/
+          if-no-files-found: warn
+
+  publish:
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: TouchTestApp-unsigned
+      - name: Verify packaged checksum
+        run: sha256sum -c TouchTestApp-unsigned.ipa.sha256
+      - name: Publish validated test IPA
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view test-latest >/dev/null 2>&1 || \
-            gh release create test-latest --title "Latest test build" --notes "Unsigned IPA for SideStore or AltStore testing."
-          test "$(gh api repos/${{ github.repository }}/commits/main --jq .sha)" = "${{ github.sha }}"
-          gh release upload test-latest TouchTestApp-unsigned.ipa TouchTestApp-unsigned.ipa.sha256 --clobber
-          gh release edit test-latest --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. Includes native UITouch diagnostics and all 21 offline scenarios. Version 3.0, build ${{ github.run_number }}, commit ${{ github.sha }}. Sign with your own tool. See simulator-evidence artifact and TESTING.md; physical-device acceptance is still required."
+          newer=$(gh api repos/${{ github.repository }}/compare/${{ github.sha }}...main --jq '[.files[].filename | select(test("^(TouchTest|project|docs/|scripts/|\\.github/workflows/build-ios)"))] | length')
+          test "$newer" = 0
+          gh release view test-latest --repo ${{ github.repository }} >/dev/null 2>&1 || \
+            gh release create test-latest --repo ${{ github.repository }} --title "Latest test build" --notes "Unsigned test IPA."
+          gh release upload test-latest --repo ${{ github.repository }} TouchTestApp-unsigned.ipa TouchTestApp-unsigned.ipa.sha256 --clobber
+          gh release edit test-latest --repo ${{ github.repository }} --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. Native UITouch diagnostics plus all 21 offline scenarios. Version 3.0, build ${{ github.run_number }}, commit ${{ github.sha }}. Three simulator categories passed portrait/landscape safe-frame checks. Physical-device and reference-image acceptance is still required."
