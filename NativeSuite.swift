@@ -32,6 +32,8 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
     private var metricsWereVisible=false
     private var menuTouchStart:CGPoint?
     private var menuDragCenter:CGPoint?
+    private var menuPan:UIPanGestureRecognizer!
+    private var menuDragTrace=""
     private var assetFolder: URL? { Bundle.main.url(forResource: "Media", withExtension: nil) }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
@@ -49,8 +51,9 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         menuButton.layer.borderColor = UIColor.white.withAlphaComponent(0.5).cgColor
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.accessibilityIdentifier = "native-project-menu"
-        menuButton.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(moveMenu(_:))))
-        menuButton.addTarget(self,action:#selector(beginMenuDrag(_:event:)),for:.touchDown)
+        menuPan=UIPanGestureRecognizer(target:self,action:#selector(moveMenu(_:)))
+        menuPan.maximumNumberOfTouches=1;menuPan.delegate=self
+        menuButton.addGestureRecognizer(menuPan)
         clearButton.setTitle("清除",for:.normal)
         clearButton.setTitleColor(.white,for:.normal)
         clearButton.titleLabel?.font = .systemFont(ofSize:12,weight:.medium)
@@ -80,6 +83,7 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
             guard let self else { return }
             if let surface = self.scene as? NativeDiagnosticSurface { self.metrics.text = surface.diagnostics }
             if let game = self.scene as? NativeGameScene { self.metrics.text = game.diagnostics }
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing"), !self.menuDragTrace.isEmpty {self.metrics.text=(self.metrics.text ?? "")+" · 菜单 "+self.menuDragTrace}
             if ProcessInfo.processInfo.arguments.contains("--smoke-evidence") { self.pollSmoke() }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: UIApplication.willResignActiveNotification, object: nil)
@@ -156,11 +160,16 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
             let key = "native-menu-" + (view.bounds.width > view.bounds.height ? "landscape" : "portrait")
             UserDefaults.standard.set([Double(menuButton.center.x/view.bounds.width),Double(menuButton.center.y/view.bounds.height)],forKey:key)
         }
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing") {menuDragTrace="state=\(pan.state.rawValue) raw=\(start) base=\(original) point=\(point) center=\(menuButton.center)"}
         if pan.state == .ended || pan.state == .cancelled || pan.state == .failed {menuTouchStart=nil;menuDragCenter=nil}
     }
-    @objc private func beginMenuDrag(_ sender:UIButton,event:UIEvent) {
-        guard let touch=event.touches(for:sender)?.first else{return}
-        menuTouchStart=touch.location(in:view);menuDragCenter=sender.center
+    func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldReceive touch:UITouch)->Bool {
+        if gestureRecognizer === menuPan,gestureRecognizer.numberOfTouches==0 {
+            // Capture before UIButton's internal menu recognizers delay or
+            // cancel touchDown delivery; every drag receives a fresh anchor.
+            menuTouchStart=touch.location(in:view);menuDragCenter=menuButton.center
+        }
+        return true
     }
     @objc private func restoreFloatingControls(_ gesture:UILongPressGestureRecognizer) {
         guard gesture.state == .began else{return}

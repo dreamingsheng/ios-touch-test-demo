@@ -1,5 +1,5 @@
-const CACHE='touch-test-v15';
-const ASSETS=['./','./index.html','./style.css?v=15','./app.js?v=15','./manifest.webmanifest','./icon.svg','./assets/moba-battlefield-v1.png','./assets/shooter-training-v1.png','./assets/lake-photo-v1.png','./assets/city-map.svg','./assets/flower-cc0.mp4'];
+const CACHE='touch-test-v16';
+const ASSETS=['./','./index.html','./style.css?v=16','./app.js?v=16','./manifest.webmanifest','./icon.svg','./assets/moba-battlefield-v1.png','./assets/shooter-training-v1.png','./assets/lake-photo-v1.png','./assets/city-map.svg','./assets/flower-cc0.mp4'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('touch-test-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{

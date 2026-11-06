@@ -168,7 +168,7 @@ final class NativeSuiteUITests: XCTestCase {
         let backStart=anchor.withOffset(CGVector(dx:moved.midX-frame.minX,dy:moved.midY-frame.minY))
         let backEnd=anchor.withOffset(CGVector(dx:original.midX-frame.minX,dy:original.midY-frame.minY))
         backStart.press(forDuration:0.1,thenDragTo:backEnd)
-        wait("Project menu must return without losing its controls") {abs(menu.frame.midX-original.midX)<3 && abs(menu.frame.midY-original.midY)<3}
+        wait("Project menu must return without losing its controls; original=\(original), moved=\(moved), returned=\(menu.frame), diagnostics=\(identified("native-metrics").label)") {abs(menu.frame.midX-original.midX)<3 && abs(menu.frame.midY-original.midY)<3}
         attachScreenshot("native-project-menu-dragged")
     }
 
