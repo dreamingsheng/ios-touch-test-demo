@@ -37,7 +37,7 @@ async function main(){
       await select('aim');await delay(100);if(process.env.SCREENSHOT_DIR){const shot=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync(process.env.SCREENSHOT_DIR+`/aim-${width}.png`,Buffer.from(shot.data,'base64'))}
       passes.push(`21 modes fit ${width}x${height}`);
     }
-    await evalv(`Promise.race([navigator.serviceWorker.ready.then(async()=>{for(let i=0;i<50;i++){if((await caches.keys()).includes('touch-test-v7'))return true;await new Promise(r=>setTimeout(r,100))}throw Error('v7 cache missing')}),new Promise((_,reject)=>setTimeout(()=>reject(Error('service worker timeout')),8000))])`);
+    await evalv(`Promise.race([navigator.serviceWorker.ready.then(async()=>{for(let i=0;i<50;i++){if((await caches.keys()).includes('touch-test-v8'))return true;await new Promise(r=>setTimeout(r,100))}throw Error('v8 cache missing')}),new Promise((_,reject)=>setTimeout(()=>reject(Error('service worker timeout')),8000))])`);
     await call('Page.reload');await delay(600);
     assert.equal(await evalv('!!navigator.serviceWorker.controller'),true);
     await call('Network.enable');await call('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:-1,uploadThroughput:-1});

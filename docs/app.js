@@ -216,5 +216,5 @@
   setInterval(()=>{val(2,eventBucket);eventBucket=0;if(mode==='multi'&&active.size){const p=active.values().next().value;val(3,`${Math.round(p.x)},${Math.round(p.y)} / ${(p.pressure||0).toFixed(2)}`)}},1000);
   addEventListener('resize',syncViewport);visualViewport?.addEventListener('resize',syncViewport);visualViewport?.addEventListener('scroll',syncViewport);
   const initialMode=copy[location.hash.slice(1)]?location.hash.slice(1):'multi';syncViewport();setMode(initialMode);if(isIOS&&!isStandalone)$('#message').textContent='全屏使用：共享 → 添加到主屏幕 → 从桌面图标打开';
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{});
 })();
