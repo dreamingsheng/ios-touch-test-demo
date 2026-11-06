@@ -68,6 +68,12 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
     // Exposed through diagnostics only in XCTest launches, so a failed gesture
     // records what UIKit actually received without changing recognition rules.
     private var layoutTrace: [String] = []
+    private struct LayoutDragAnchor {
+        let touch: ObjectIdentifier
+        let point: CGPoint
+        let center: CGPoint
+    }
+    private var layoutDragAnchors: [ObjectIdentifier:LayoutDragAnchor] = [:]
 
     var editingLayout = false {
         didSet {
@@ -274,18 +280,31 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
     }
     @objc private func moveControl(_ recognizer: UIPanGestureRecognizer) {
         guard editingLayout, let control = recognizer.view else { traceLayout("blocked pan state=\(recognizer.state.rawValue) edit=\(editingLayout)"); return }
-        let delta = recognizer.translation(in: self)
-        let before = control.center
-        control.center = clamp(CGPoint(x: control.center.x + delta.x, y: control.center.y + delta.y), size: control.bounds.size)
-        if recognizer.state == .began || recognizer.state == .ended || recognizer.state == .cancelled {
-            traceLayout("pan \(control.accessibilityIdentifier ?? "?") state=\(recognizer.state.rawValue) location=\(recognizer.location(in:self)) delta=\(delta) center=\(before)->\(control.center)")
+        let key = ObjectIdentifier(control)
+        if recognizer.state == .failed { layoutDragAnchors[key] = nil; return }
+        guard let anchor = layoutDragAnchors[key] else {
+            traceLayout("missing raw anchor \(control.accessibilityIdentifier ?? "?") state=\(recognizer.state.rawValue)")
+            return
         }
-        recognizer.setTranslation(.zero, in: self)
+        let point = recognizer.location(in:self)
+        let delta = CGPoint(x:point.x-anchor.point.x,y:point.y-anchor.point.y)
+        let before = control.center
+        if recognizer.state == .began || recognizer.state == .changed || recognizer.state == .ended {
+            // A short drag can reach its endpoint before UIPan recognizes it;
+            // UIKit may then report translation == zero in both began/ended.
+            // Use the real touch-down point and original control center, never
+            // the current center plus recognition-relative increments.
+            control.center = clamp(CGPoint(x:anchor.center.x+delta.x,y:anchor.center.y+delta.y),size:control.bounds.size)
+        }
+        if recognizer.state == .began || recognizer.state == .ended || recognizer.state == .cancelled {
+            traceLayout("pan \(control.accessibilityIdentifier ?? "?") state=\(recognizer.state.rawValue) location=\(point) rawStart=\(anchor.point) rawDelta=\(delta) translation=\(recognizer.translation(in:self)) center=\(before)->\(control.center)")
+        }
         if recognizer.state == .ended || recognizer.state == .cancelled {
             var stored: [String: [String: Double]] = [:]
             for (key, item) in controls { stored[key] = ["x": Double(item.center.x / bounds.width), "y": Double(item.center.y / bounds.height)] }
             UserDefaults.standard.set(stored, forKey: layoutStorageKey)
             stickHome = controls["stick"]?.center ?? stickHome
+            layoutDragAnchors[key] = nil
         }
     }
     func resetLayout() {
@@ -314,6 +333,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
         roles.removeAll(); previous.removeAll(); pressed.removeAll(); castVectors.removeAll(); cancelledCasts.removeAll()
         moveID = nil; lookID = nil; vector = .zero
         cameraOffset = .zero
+        layoutDragAnchors.removeAll()
         controls.values.forEach { $0.pressed = false; $0.stickVector = .zero }
         controls["stick"]?.center = stickHome
         setNeedsDisplay()
@@ -321,7 +341,15 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard !editingLayout, settingsPanel == nil else {
-            if editingLayout, let touch = touches.first { traceLayout("edit-touch \(touch.view?.accessibilityIdentifier ?? "?") point=\(touch.location(in:self))") }
+            if editingLayout {
+                for touch in touches {
+                    let point = touch.location(in:self)
+                    if let control = touch.view as? NativeHUDControl,control.superview === self {
+                        layoutDragAnchors[ObjectIdentifier(control)] = LayoutDragAnchor(touch:ObjectIdentifier(touch),point:point,center:control.center)
+                    }
+                    traceLayout("edit-touch \(touch.view?.accessibilityIdentifier ?? "?") point=\(point)")
+                }
+            }
             return
         }
         startTimer()
@@ -380,8 +408,22 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
         accessibilityValue = diagnostics
         setNeedsDisplay()
     }
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { end(touches, cancelled: false) }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { end(touches, cancelled: true) }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { finishUnrecognizedLayoutTouches(touches); end(touches, cancelled: false) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { finishUnrecognizedLayoutTouches(touches); end(touches, cancelled: true) }
+    private func finishUnrecognizedLayoutTouches(_ touches:Set<UITouch>) {
+        guard editingLayout else { return }
+        for touch in touches {
+            guard let control = touch.view as? NativeHUDControl,
+                  let pan = control.gestureRecognizers?.first(where:{$0 is UIPanGestureRecognizer}) else { continue }
+            // UIKit cancels responder touches when the pan begins. Keep that
+            // anchor until the recognizer's ended/cancelled callback consumes
+            // it; only a gesture that never recognized can be cleaned here.
+            if pan.state == .possible || pan.state == .failed {
+                let key = ObjectIdentifier(control)
+                if layoutDragAnchors[key]?.touch == ObjectIdentifier(touch) { layoutDragAnchors[key] = nil }
+            }
+        }
+    }
     private func end(_ touches: Set<UITouch>, cancelled: Bool) {
         for touch in touches {
             let id = ObjectIdentifier(touch)

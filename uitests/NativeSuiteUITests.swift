@@ -155,6 +155,23 @@ final class NativeSuiteUITests: XCTestCase {
         attachScreenshot("native-reader-scrolled")
     }
 
+    func testNativeProjectMenuShortDragKeepsClearAccessible() {
+        launch(mode:"multi")
+        let menu=identified("native-project-menu"),original=menu.frame
+        let window=app.windows.firstMatch,frame=window.frame,anchor=window.coordinate(withNormalizedOffset:.zero)
+        let origin=anchor.withOffset(CGVector(dx:original.midX-frame.minX,dy:original.midY-frame.minY))
+        let target=anchor.withOffset(CGVector(dx:original.midX-frame.minX-64,dy:original.midY-frame.minY+30))
+        origin.press(forDuration:0.1,thenDragTo:target)
+        wait("Project menu must follow a short drag") {abs(menu.frame.midX-original.midX+64)<3 && abs(menu.frame.midY-original.midY-30)<3}
+        XCTAssertTrue(identified("native-clear").isHittable)
+        let moved=menu.frame
+        let backStart=anchor.withOffset(CGVector(dx:moved.midX-frame.minX,dy:moved.midY-frame.minY))
+        let backEnd=anchor.withOffset(CGVector(dx:original.midX-frame.minX,dy:original.midY-frame.minY))
+        backStart.press(forDuration:0.1,thenDragTo:backEnd)
+        wait("Project menu must return without losing its controls") {abs(menu.frame.midX-original.midX)<3 && abs(menu.frame.midY-original.midY)<3}
+        attachScreenshot("native-project-menu-dragged")
+    }
+
     func testNativeGameFloatingStickAndMovableSavedLayout() {
         launch(mode:"moba")
         wait("Game must enter landscape") {self.app.windows.firstMatch.frame.width>self.app.windows.firstMatch.frame.height}

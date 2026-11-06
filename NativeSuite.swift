@@ -30,6 +30,8 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
     private var previousBounds: CGSize = .zero
     private var restoreControls: UILongPressGestureRecognizer!
     private var metricsWereVisible=false
+    private var menuTouchStart:CGPoint?
+    private var menuDragCenter:CGPoint?
     private var assetFolder: URL? { Bundle.main.url(forResource: "Media", withExtension: nil) }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
@@ -48,6 +50,7 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.accessibilityIdentifier = "native-project-menu"
         menuButton.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(moveMenu(_:))))
+        menuButton.addTarget(self,action:#selector(beginMenuDrag(_:event:)),for:.touchDown)
         clearButton.setTitle("清除",for:.normal)
         clearButton.setTitleColor(.white,for:.normal)
         clearButton.titleLabel?.font = .systemFont(ofSize:12,weight:.medium)
@@ -144,13 +147,20 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         menuButton.menu = UIMenu(title: "Touch Test · 原生测试", children: children)
     }
     @objc private func moveMenu(_ pan: UIPanGestureRecognizer) {
-        let delta = pan.translation(in: view)
-        menuButton.center = CGPoint(x:menuButton.center.x+delta.x,y:menuButton.center.y+delta.y)
-        pan.setTranslation(.zero,in:view); clampMenu()
+        if menuTouchStart==nil {let p=pan.location(in:view),d=pan.translation(in:view);menuTouchStart=CGPoint(x:p.x-d.x,y:p.y-d.y);menuDragCenter=menuButton.center}
+        guard let start=menuTouchStart,let original=menuDragCenter else{return}
+        let point=pan.location(in:view)
+        menuButton.center = CGPoint(x:original.x+point.x-start.x,y:original.y+point.y-start.y)
+        clampMenu()
         if pan.state == .ended {
             let key = "native-menu-" + (view.bounds.width > view.bounds.height ? "landscape" : "portrait")
             UserDefaults.standard.set([Double(menuButton.center.x/view.bounds.width),Double(menuButton.center.y/view.bounds.height)],forKey:key)
         }
+        if pan.state == .ended || pan.state == .cancelled || pan.state == .failed {menuTouchStart=nil;menuDragCenter=nil}
+    }
+    @objc private func beginMenuDrag(_ sender:UIButton,event:UIEvent) {
+        guard let touch=event.touches(for:sender)?.first else{return}
+        menuTouchStart=touch.location(in:view);menuDragCenter=sender.center
     }
     @objc private func restoreFloatingControls(_ gesture:UILongPressGestureRecognizer) {
         guard gesture.state == .began else{return}
