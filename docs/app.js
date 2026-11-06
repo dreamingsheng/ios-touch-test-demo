@@ -35,6 +35,7 @@
   let gridCells = [], edgeSegments = [], lineHit = new Set(), ghostCount = 0, ghostLeft = 20;
   let tapHits = 0, tapTotal = 0, hold = null, gesture = null, joystickId = null, aimId = null, crossIds = {axis:null,cursor:null};
   let skillPointers = new Map(), shots = 0, autoScore = {sum:0,count:0}, sceneSwipe = null, readPage = 0, videoIndex = 0;
+  let videoStates=[],videoPaused=false;
 
   function syncViewport(){
     const vv = window.visualViewport;
@@ -74,11 +75,13 @@
 
   function pointerDown(e){
     if(['ui','menu','type'].includes(mode)) return;
+    if(e.target.closest('.video-sheet'))return;
     if(e.target.closest('button,input,textarea,select,label') && !e.target.closest('.fire')) return;
     e.preventDefault(); stage.setPointerCapture?.(e.pointerId);
     const p={...pointFromEvent(e),color:palette[Math.abs(e.pointerId)%palette.length],start:performance.now()};
     active.set(e.pointerId,p);trails.set(e.pointerId,p);maxTouches=Math.max(maxTouches,active.size);eventBucket++;updateTouchStats();
     if(mode==='ghost') registerGhost();
+    if(['multi','draw','line'].includes(mode)){ctx.beginPath();ctx.arc(p.x,p.y,mode==='draw'?3:2,0,Math.PI*2);ctx.fillStyle=p.color;ctx.fill()}
     if(mode==='tap') scoreTap(p);
     if(mode==='hold') startHold(e.pointerId,p);
     if(mode==='pinch'||mode==='map') gesture.last=gestureSnapshot();
@@ -110,11 +113,16 @@
   }
   function pointerUp(e){
     const p=active.get(e.pointerId);if(!p)return;eventBucket++;
+    if(e.type==='pointerup'&&Number.isFinite(e.clientX)&&Number.isFinite(e.clientY)){
+      const end=pointFromEvent(e,p);
+      if(end.x!==p.x||end.y!==p.y)pointerMove(e);
+    }
     if(mode==='hold') endHold(e.pointerId,p);
     if(mode==='moba'||mode==='aim') gameUp(e.pointerId);
     if(mode==='cross') crossUp(e.pointerId);
     if(sceneSwipe?.id===e.pointerId){if(e.type==='pointercancel'||e.type==='lostpointercapture')sceneSwipe=null;else finishSceneSwipe()}
     active.delete(e.pointerId);trails.delete(e.pointerId);
+    if(['ghost','auto'].includes(mode))val(mode==='ghost'?1:0,active.size);
     if((mode==='pinch'||mode==='map')&&gesture)gesture.last=gestureSnapshot();
     if(mode==='pinch'||mode==='map')renderGesture();
     updateTouchStats();redrawOverlay();
@@ -123,7 +131,7 @@
   function drawGuides(){const r=stage.getBoundingClientRect();ctx.save();ctx.strokeStyle='#ffffff35';ctx.lineWidth=18;ctx.setLineDash([14,12]);for(const [a,b] of [[{x:0,y:r.height/2},{x:r.width,y:r.height/2}],[{x:r.width/2,y:0},{x:r.width/2,y:r.height}],[{x:0,y:r.height*.18},{x:r.width,y:r.height*.82}]]){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}ctx.restore()}
   function scoreLine(p){const r=stage.getBoundingClientRect(), near=[];if(Math.abs(p.y-r.height/2)<24)near.push(['h',p.x/r.width]);if(Math.abs(p.x-r.width/2)<24)near.push(['v',p.y/r.height]);const expected=r.height*.18+(p.x/r.width)*r.height*.64;if(Math.abs(p.y-expected)<24)near.push(['d',p.x/r.width]);for(const [g,t] of near)lineHit.add(`${g}:${Math.max(0,Math.min(49,Math.floor(t*50)))}`);val(3,Math.round(lineHit.size/150*100)+'%')}
 
-  function buildGhost(){ghostCount=0;ghostLeft=20;showPanel('<div class="ghost-card" id="ghostCard"><span>剩余时间</span><strong id="ghostTime">20s</strong><p id="ghostText">请将手机平放并且不要触摸测试区</p></div>');setStats(['意外触点','当前触点','事件/秒','倒计时'],['0','0','0','20s']);modeTimer=setInterval(()=>{ghostLeft--;val(3,ghostLeft+'s');$('#ghostTime').textContent=ghostLeft+'s';if(ghostLeft<=0){clearInterval(modeTimer);modeTimer=null;$('#ghostText').textContent=ghostCount===0?'通过：未发现鬼点':'异常：记录到触控事件';$('#message').textContent=$('#ghostText').textContent}},1000)}
+  function buildGhost(){ghostCount=0;ghostLeft=20;const deadline=performance.now()+20000;showPanel('<div class="ghost-card" id="ghostCard"><span>前台观察剩余时间</span><strong id="ghostTime">20s</strong><p id="ghostText">请将手机平放并且不要触摸测试区</p><small>仅记录网页测试区内的触控；未发现输入不等于硬件完全正常。</small></div>');setStats(['意外触点','当前触点','事件/秒','倒计时'],['0','0','0','20s']);modeTimer=setInterval(()=>{ghostLeft=Math.max(0,Math.ceil((deadline-performance.now())/1000));val(3,ghostLeft+'s');$('#ghostTime').textContent=ghostLeft+'s';if(ghostLeft<=0){clearInterval(modeTimer);modeTimer=null;$('#ghostText').textContent=ghostCount===0?'观察结束：20 秒内未记录到触控':'观察结束：记录到 '+ghostCount+' 次触控';$('#message').textContent=$('#ghostText').textContent}},200)}
   function registerGhost(){if(ghostLeft<=0)return;ghostCount++;val(0,ghostCount);val(1,active.size);$('#ghostCard')?.classList.add('bad');if($('#ghostText'))$('#ghostText').textContent=`检测到第 ${ghostCount} 次意外触控`}
 
   function buildAuto(){autoScore={sum:0,count:0};showPanel('<div class="auto-card"><span>跟随靶点移动</span><strong id="autoError">—</strong><p>手指保持按住黄色圆点，系统自动扫描全屏</p></div>',true);setStats(['当前触点','采样数','事件/秒','平均误差'],['0','0','0','—']);$('#target').style.display='block';const token=++animationToken;const loop=()=>{if(token!==animationToken||mode!=='auto')return;const r=stage.getBoundingClientRect(),t=performance.now()/1000,x=r.width*(.5+.38*Math.sin(t*.83)),y=r.height*(.5+.35*Math.sin(t*1.27+1));const el=$('#target');el.style.left=x+'px';el.style.top=y+'px';const first=active.values().next().value;if(first){const d=Math.hypot(first.x-x,first.y-y);autoScore.sum+=d;autoScore.count++;const avg=autoScore.sum/autoScore.count;val(0,active.size);val(1,autoScore.count);val(3,avg.toFixed(1)+'px');$('#autoError').textContent=avg.toFixed(1)+'px'}requestAnimationFrame(loop)};requestAnimationFrame(loop)}
@@ -135,7 +143,19 @@
 
   function buildGesture(kind){gesture={x:0,y:0,scale:kind==='map'?.55:1,last:null};if(kind==='map')showPanel('<div class="transform-world map-world" id="transformWorld"><div class="road r1"></div><div class="road r2"></div><i class="map-pin p1"></i><i class="map-pin p2"></i><i class="map-pin p3"></i></div>');else showPanel('<div class="transform-world photo-world" id="transformWorld"></div>');setStats(['触点','缩放','事件/秒','平移'],['0',gesture.scale.toFixed(2)+'×','0','0,0']);renderGesture()}
   function gestureSnapshot(){const pts=[...active.values()];if(!pts.length)return null;const center=pts.reduce((a,p)=>({x:a.x+p.x/pts.length,y:a.y+p.y/pts.length}),{x:0,y:0});return{count:pts.length,center,dist:pts.length>1?Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y):0}}
-  function updateGesture(){const now=gestureSnapshot(),last=gesture.last;if(now&&last){gesture.x+=now.center.x-last.center.x;gesture.y+=now.center.y-last.center.y;if(now.count>1&&last.count>1&&last.dist>4)gesture.scale=Math.max(.25,Math.min(5,gesture.scale*now.dist/last.dist));renderGesture()}gesture.last=now}
+  function updateGesture(){
+    const now=gestureSnapshot(),last=gesture.last;
+    if(now&&last){
+      const r=stage.getBoundingClientRect();let scale=gesture.scale;
+      if(now.count>1&&last.count>1&&last.dist>4)scale=Math.max(.25,Math.min(5,gesture.scale*now.dist/last.dist));
+      const ratio=scale/gesture.scale;
+      // Keep the content under the previous finger centroid under the new centroid.
+      gesture.x=now.center.x-r.width/2-(last.center.x-r.width/2-gesture.x)*ratio;
+      gesture.y=now.center.y-r.height/2-(last.center.y-r.height/2-gesture.y)*ratio;
+      gesture.scale=scale;renderGesture();
+    }
+    gesture.last=now;
+  }
   function renderGesture(){const w=$('#transformWorld');if(!w)return;w.style.transform=`translate(-50%,-50%) translate(${gesture.x}px,${gesture.y}px) scale(${gesture.scale})`;val(0,active.size);val(1,gesture.scale.toFixed(2)+'×');val(3,`${Math.round(gesture.x)},${Math.round(gesture.y)}`)}
 
   const readingPages=[
@@ -145,9 +165,46 @@
   ];
   function buildRead(){readPage=0;showPanel('<div class="reader"><div class="reader-bar"><button id="fontDown">A−</button><span>Touch Test 阅读</span><button id="fontUp">A＋</button></div><article id="readerPage"></article><div class="page-dots" id="pageDots"></div></div>');setStats(['当前页','翻页次数','事件/秒','手势'],['1/3','0','0','左右滑动']);let turns=0,font=18;const article=$('#readerPage');$('#fontDown').onclick=()=>{font=Math.max(14,font-2);article.style.fontSize=font+'px'};$('#fontUp').onclick=()=>{font=Math.min(28,font+2);article.style.fontSize=font+'px'};panel.dataset.turns=turns;renderRead()}
   function renderRead(){const page=readingPages[readPage],article=$('#readerPage');if(!article)return;article.innerHTML=`<h2>${page[0]}</h2>${page[1].split('\n\n').map(x=>`<p>${x}</p>`).join('')}`;$('#pageDots').innerHTML=readingPages.map((_,i)=>`<i class="${i===readPage?'on':''}"></i>`).join('');val(0,`${readPage+1}/${readingPages.length}`)}
-  function buildVideo(){videoIndex=0;showPanel('<div class="video-feed" id="videoFeed"><div class="video-scene" id="videoScene"></div><div class="video-side"><button data-video-action="like">♡<small id="likeCount">128</small></button><button data-video-action="comment">◌<small>评论</small></button><button data-video-action="share">↗<small>分享</small></button></div><div class="video-caption"><b id="videoUser"></b><p id="videoText"></p><input id="videoProgress" type="range" min="0" max="100" value="35"></div></div>');setStats(['当前视频','切换次数','事件/秒','进度'],['1/4','0','0','35%']);let liked=false;panel.querySelector('[data-video-action="like"]').onclick=e=>{liked=!liked;e.currentTarget.classList.toggle('liked',liked);$('#likeCount').textContent=liked?'129':'128'};$('#videoProgress').oninput=e=>val(3,e.target.value+'%');panel.dataset.turns='0';renderVideo()}
-  function renderVideo(){const scenes=[['山野记录','#263f2d','#81b080'],['城市夜行','#17152d','#795fbc'],['海边日落','#3c2530','#e58b67'],['运动瞬间','#182d38','#4db0c8']],s=scenes[videoIndex],scene=$('#videoScene');if(!scene)return;scene.style.setProperty('--scene-a',s[1]);scene.style.setProperty('--scene-b',s[2]);$('#videoUser').textContent='@touch_test_'+(videoIndex+1);$('#videoText').textContent=s[0]+' · 上下滑动切换内容';val(0,`${videoIndex+1}/${scenes.length}`)}
-  function finishSceneSwipe(){const s=sceneSwipe;sceneSwipe=null;if(!s)return;const dx=s.x-s.startX,dy=s.y-s.startY;if(mode==='read'&&Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)){const next=Math.max(0,Math.min(readingPages.length-1,readPage+(dx<0?1:-1)));if(next!==readPage){readPage=next;panel.dataset.turns=String((+panel.dataset.turns||0)+1);val(1,panel.dataset.turns);renderRead()}val(3,dx<0?'向左翻页':'向右翻页')}if(mode==='video'&&Math.abs(dy)>55&&Math.abs(dy)>Math.abs(dx)){videoIndex=(videoIndex+(dy<0?1:-1)+4)%4;panel.dataset.turns=String((+panel.dataset.turns||0)+1);val(1,panel.dataset.turns);renderVideo();val(3,dy<0?'下一条':'上一条')}}
+  function buildVideo(){
+    videoIndex=0;videoPaused=false;videoStates=Array.from({length:4},()=>({progress:0,liked:false,comments:[]}));
+    showPanel('<div class="video-feed" id="videoFeed"><div class="video-scene" id="videoScene"><div class="motion-orb"></div><span id="playState">播放中 · 轻点暂停</span></div><div class="video-side"><button data-video-action="like" aria-label="点赞">♡<small id="likeCount">128</small></button><button data-video-action="comment">◌<small>评论</small></button><button data-video-action="share">↗<small>分享</small></button></div><div class="video-caption"><b id="videoUser"></b><p id="videoText"></p><input id="videoProgress" aria-label="播放进度" type="range" min="0" max="100" step="0.1" value="0"></div><div id="videoSheetHost"></div></div>');
+    setStats(['当前视频','切换次数','事件/秒','进度'],['1/4','0','0','0%']);panel.dataset.turns='0';
+    panel.querySelector('[data-video-action="like"]').onclick=()=>{videoStates[videoIndex].liked=!videoStates[videoIndex].liked;renderVideo()};
+    panel.querySelector('[data-video-action="comment"]').onclick=()=>openVideoSheet('comment');
+    panel.querySelector('[data-video-action="share"]').onclick=()=>openVideoSheet('share');
+    $('#videoProgress').oninput=e=>{videoStates[videoIndex].progress=+e.target.value;renderVideoProgress()};
+    let last=performance.now();modeTimer=setInterval(()=>{const now=performance.now(),dt=now-last;last=now;if(!videoPaused&&!document.hidden&&!$('.video-sheet')&&!active.size){const s=videoStates[videoIndex];s.progress=(s.progress+dt/200)%100;renderVideoProgress()}},100);
+    renderVideo();
+  }
+  function renderVideoProgress(){const s=videoStates[videoIndex];if(!s||!$('#videoProgress'))return;$('#videoProgress').value=s.progress;val(3,s.progress.toFixed(0)+'%')}
+  function renderVideo(){const scenes=[['山野记录','#263f2d','#81b080'],['城市夜行','#17152d','#795fbc'],['海边日落','#3c2530','#e58b67'],['运动瞬间','#182d38','#4db0c8']],s=scenes[videoIndex],scene=$('#videoScene');if(!scene)return;scene.style.setProperty('--scene-a',s[1]);scene.style.setProperty('--scene-b',s[2]);$('#videoUser').textContent='@touch_test_'+(videoIndex+1);$('#videoText').textContent=s[0]+' · 上下滑动切换内容';val(0,`${videoIndex+1}/${scenes.length}`);const state=videoStates[videoIndex];panel.querySelector('[data-video-action="like"]').classList.toggle('liked',state.liked);$('#likeCount').textContent=state.liked?'129':'128';$('#videoFeed').classList.toggle('paused',videoPaused);$('#playState').textContent=videoPaused?'已暂停 · 轻点播放':'播放中 · 轻点暂停';renderVideoProgress()}
+  function openVideoSheet(kind){
+    sceneSwipe=null;const host=$('#videoSheetHost');
+    host.innerHTML='<section class="video-sheet" role="dialog" aria-modal="true" aria-label="'+(kind==='comment'?'评论':'分享')+'"><div class="sheet-heading"><b>'+(kind==='comment'?'评论':'分享测试')+'</b><button id="closeVideoSheet">关闭</button></div><div id="sheetBody"></div></section>';
+    $('#closeVideoSheet').onclick=()=>{host.innerHTML=''};
+    const body=$('#sheetBody');
+    if(kind==='comment'){
+      const list=document.createElement('div');list.className='comment-list';body.append(list);
+      const draw=()=>{list.replaceChildren();const entries=videoStates[videoIndex].comments;for(const text of entries.slice(-3)){const p=document.createElement('p');p.textContent=text;list.append(p)}if(!entries.length)list.textContent='输入评论，测试打字与发送。'};draw();
+      const form=document.createElement('form');form.innerHTML='<textarea id="videoComment" aria-label="评论内容" maxlength="200" placeholder="写下测试评论…"></textarea><button type="submit">发送</button>';body.append(form);
+      form.onsubmit=e=>{e.preventDefault();const input=$('#videoComment'),text=input.value.trim();if(text){videoStates[videoIndex].comments.push(text);input.value='';draw()}};
+    }else{
+      body.innerHTML='<p>复制当前场景链接，在另一窗口测试打开。</p><button id="copyVideoLink">复制链接</button><p id="shareResult" role="status"></p>';
+      $('#copyVideoLink').onclick=async()=>{const url=new URL(location.href);url.hash='video';try{await navigator.clipboard.writeText(url.href);$('#shareResult').textContent='链接已复制'}catch(_){$('#shareResult').textContent=url.href}};
+    }
+  }
+  function finishSceneSwipe(){
+    const s=sceneSwipe;sceneSwipe=null;if(!s)return;const dx=s.x-s.startX,dy=s.y-s.startY;
+    if(mode==='read'&&Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)){
+      const next=Math.max(0,Math.min(readingPages.length-1,readPage+(dx<0?1:-1)));
+      if(next!==readPage){readPage=next;panel.dataset.turns=String((+panel.dataset.turns||0)+1);val(1,panel.dataset.turns);renderRead()}
+      val(3,dx<0?'向左翻页':'向右翻页');
+    }
+    if(mode==='video'){
+      if(Math.abs(dy)>55&&Math.abs(dy)>Math.abs(dx)){videoIndex=(videoIndex+(dy<0?1:-1)+4)%4;panel.dataset.turns=String((+panel.dataset.turns||0)+1);val(1,panel.dataset.turns);videoPaused=false;renderVideo()}
+      else if(Math.abs(dx)<8&&Math.abs(dy)<8){videoPaused=!videoPaused;renderVideo()}
+    }
+  }
 
   function gameHTML(aim=false){return `<div class="game ${aim?'shooter-game':'moba-game'}"><div class="game-top"><div class="mini-map"><i></i><i></i><i></i></div><div class="match-info">${aim?'<b>NW · 330 · N · 30 · NE</b><span>剩余 48 · 淘汰 3</span>':'<b><em>12</em>　08:36　<em>9</em></b><span>测试训练场</span>'}</div><div class="game-status">${aim?'40 / 180':'Lv. 15'}</div></div><div class="player-state"><span></span><i></i></div><div class="joystick" id="joyBase"><div class="joy-knob" id="joyKnob"></div></div>${aim?'<div class="aim-zone"><small>滑动瞄准区</small></div><div class="crosshair" id="crosshair"></div><div class="weapon-bar">主武器　40/180　　副武器</div><div class="fire" id="fire">开火</div>':'<div class="lane-mark lane-a"></div><div class="lane-mark lane-b"></div><div class="skills"><div class="skill utility">召唤</div><div class="skill">技能 1</div><div class="skill">技能 2</div><div class="skill big">攻击</div></div>'}</div>`}
   function buildGame(aim=false){showPanel(gameHTML(aim));joystickId=aimId=null;skillPointers.clear();shots=0;setStats(['触点','左轴','事件/秒',aim?'开火':'技能'],['0','0,0','0','0']);if(aim){const r=stage.getBoundingClientRect(),c=$('#crosshair');c.style.left=r.width*.72+'px';c.style.top=r.height*.45+'px'}}
