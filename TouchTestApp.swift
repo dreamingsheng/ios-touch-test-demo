@@ -36,6 +36,8 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
         super.viewDidLoad()
         view.backgroundColor = .black
         let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.userContentController.add(self, name: "touchTestNative")
         let bridge = """
         window.touchTestNative = true;

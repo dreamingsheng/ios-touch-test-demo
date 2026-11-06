@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - 'TouchTest*.swift'
+      - 'project.pbxproj'
+      - 'TouchTestApp.xcscheme'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/workflows/build-ios.yml'
 
 permissions:
   contents: write

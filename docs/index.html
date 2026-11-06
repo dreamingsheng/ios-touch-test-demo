@@ -11,12 +11,12 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./style.css?v=11">
+  <link rel="stylesheet" href="./style.css?v=12">
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="title"><h1>Touch Test <small>v11</small></h1><small id="modeName">多点轨迹</small><button id="safeBtn">边距</button><button id="reportBtn">报告</button></div>
+    <div class="title"><h1>Touch Test <small>v12</small></h1><small id="modeName">多点轨迹</small><button id="safeBtn">边距</button><button id="reportBtn">报告</button></div>
     <div id="stats">
       <div class="stat"><b id="v0">0</b><span id="l0">当前触点</span></div>
       <div class="stat"><b id="v1">0</b><span id="l1">最大触点</span></div>
@@ -36,6 +36,6 @@
 </div>
 <dialog id="reportDialog" aria-labelledby="reportTitle"><div class="report-heading"><h2 id="reportTitle">本次测试报告</h2><button id="closeReport">关闭</button></div><p>采样与报告只留在本页内存中，不自动上传。导出后可复查轨迹；页面重开会清空。报告不自动判定硬件合格。</p><label>设备型号 / 测试条件<input id="reportDevice" maxlength="160" placeholder="例如：iPhone 型号、iOS 版本、充电/未充电"></label><p id="reportStatus" role="status"></p><textarea id="reportPreview" readonly aria-label="报告预览"></textarea><div class="report-actions"><button id="exportJson">导出完整 JSON</button><button id="exportCsv">导出轨迹 CSV</button></div></dialog>
 <dialog id="safeDialog" aria-label="安全边距"><div class="report-heading"><b>透明全屏 · 安全边距</b><button id="closeSafe">完成</button></div><p>背景始终铺满屏幕。若系统工具栏仍遮挡内容，可在系统安全区之外增加边距，拖动后立即生效。</p><label>顶部额外边距 <b id="topInsetValue">0</b> px<input id="topInset" type="range" min="0" max="100" value="0"></label><label>底部额外边距 <b id="bottomInsetValue">0</b> px<input id="bottomInset" type="range" min="0" max="100" value="0"></label><button id="resetSafe">恢复自动</button><p id="safeMetrics"></p></dialog>
-<script src="./app.js?v=11"></script>
+<script src="./app.js?v=12"></script>
 </body>
 </html>

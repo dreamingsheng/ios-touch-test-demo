@@ -20,6 +20,9 @@ web = app / 'Web'
 for name in ['index.html', 'app.js', 'style.css', 'icon.svg', 'manifest.webmanifest']:
     source = pathlib.Path('docs') / name
     assert hashlib.sha256((web / name).read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest(), name
+for source in pathlib.Path('docs/assets').rglob('*'):
+    if source.is_file():
+        assert hashlib.sha256((web / source.relative_to('docs')).read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest(), str(source)
 html = (web / 'index.html').read_text()
 assert len(re.findall(r'data-mode="[a-z]+"', html)) == 21
 assert (app / info['CFBundleExecutable']).is_file()
