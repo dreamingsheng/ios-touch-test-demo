@@ -417,7 +417,7 @@ private struct DisplayView: View {
         case 4: Color.black
         case 5: Color(white: 0.5)
         case 6: LinearGradient(colors: stride(from: 0.0, through: 1.0, by: 0.1).map { Color(white: $0) }, startPoint: .leading, endPoint: .trailing)
-        default: HStack(spacing: 0) { Color.white; Color.yellow; Color.cyan; Color.green; Color.magenta; Color.red; Color.blue; Color.black }
+        default: HStack(spacing: 0) { Color.white; Color.yellow; Color.cyan; Color.green; Color(red: 1, green: 0, blue: 1); Color.red; Color.blue; Color.black }
         }
     }
 }
