@@ -1,13 +1,15 @@
 import UIKit
 import SwiftUI
 
+protocol NativeResettableScene: AnyObject { func resetScene() }
+
 struct NativeSuiteView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> NativeSuiteController { NativeSuiteController() }
     func updateUIViewController(_ controller: NativeSuiteController, context: Context) {}
     static func dismantleUIViewController(_ controller: NativeSuiteController, coordinator: ()) { controller.stop() }
 }
 
-final class NativeSuiteController: UIViewController {
+final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate {
     static let modes: [(String, String)] = [
         ("multi","多点轨迹"),("draw","自由画画"),("line","引导划线"),("ghost","鬼点监测"),
         ("auto","移动靶点跟随"),("grid","触控覆盖网格"),("edge","四边与四角"),
@@ -18,6 +20,7 @@ final class NativeSuiteController: UIViewController {
     private var mode = "multi"
     private var scene: UIView?
     private let menuButton = UIButton(type: .system)
+    private let clearButton = UIButton(type: .system)
     private let metrics = UILabel()
     private var clock: Timer?
     private var smokeSequence = ""
@@ -25,7 +28,9 @@ final class NativeSuiteController: UIViewController {
     private var stableSize: CGSize = .zero
     private var stableObservations = 0
     private var previousBounds: CGSize = .zero
-    private var assetFolder: URL? { Bundle.main.url(forResource: "Web", withExtension: nil)?.appendingPathComponent("assets") }
+    private var restoreControls: UILongPressGestureRecognizer!
+    private var metricsWereVisible=false
+    private var assetFolder: URL? { Bundle.main.url(forResource: "Media", withExtension: nil) }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
@@ -43,6 +48,19 @@ final class NativeSuiteController: UIViewController {
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.accessibilityIdentifier = "native-project-menu"
         menuButton.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(moveMenu(_:))))
+        clearButton.setTitle("清除",for:.normal)
+        clearButton.setTitleColor(.white,for:.normal)
+        clearButton.titleLabel?.font = .systemFont(ofSize:12,weight:.medium)
+        clearButton.backgroundColor=UIColor.black.withAlphaComponent(0.3)
+        clearButton.layer.cornerRadius=16
+        clearButton.layer.borderWidth=0.5
+        clearButton.layer.borderColor=UIColor.white.withAlphaComponent(0.5).cgColor
+        clearButton.accessibilityIdentifier="native-clear"
+        clearButton.addTarget(self,action:#selector(clearCurrentTest),for:.touchUpInside)
+        restoreControls=UILongPressGestureRecognizer(target:self,action:#selector(restoreFloatingControls(_:)))
+        restoreControls.numberOfTouchesRequired=2;restoreControls.minimumPressDuration=1.1
+        restoreControls.cancelsTouchesInView=false;restoreControls.isEnabled=false;restoreControls.delegate=self
+        view.addGestureRecognizer(restoreControls)
         metrics.numberOfLines = 3
         metrics.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         metrics.textColor = .white
@@ -52,7 +70,8 @@ final class NativeSuiteController: UIViewController {
         let arguments=ProcessInfo.processInfo.arguments
         metrics.isHidden = !arguments.contains("--ui-testing")
         let startIndex=arguments.firstIndex(of:"--native-mode")
-        let initial=startIndex.flatMap{ $0+1<arguments.count ? arguments[$0+1] : nil } ?? "multi"
+        let requested=startIndex.flatMap{ $0+1<arguments.count ? arguments[$0+1] : nil } ?? "multi"
+        let initial=Self.modes.contains(where:{$0.0==requested}) ? requested : "multi"
         showMode(initial, automaticOrientation: false)
         clock = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -76,7 +95,7 @@ final class NativeSuiteController: UIViewController {
         }
         clampMenu()
         metrics.frame = CGRect(x: safe.left+10,y: safe.top+10,width:max(0,view.bounds.width-safe.left-safe.right-95),height:52)
-        view.bringSubviewToFront(metrics); view.bringSubviewToFront(menuButton)
+        view.bringSubviewToFront(metrics); view.bringSubviewToFront(menuButton);view.bringSubviewToFront(clearButton)
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -95,7 +114,7 @@ final class NativeSuiteController: UIViewController {
         scene!.frame = view.bounds
         scene!.autoresizingMask = [.flexibleWidth,.flexibleHeight]
         view.addSubview(scene!)
-        view.addSubview(metrics); view.addSubview(menuButton)
+        view.addSubview(metrics); view.addSubview(menuButton);view.addSubview(clearButton)
         refreshMenu(); view.setNeedsLayout()
         if automaticOrientation && ["moba","aim"].contains(next) { requestOrientation(true) }
     }
@@ -111,8 +130,9 @@ final class NativeSuiteController: UIViewController {
             })
         }
         var tools: [UIMenuElement] = [
-            UIAction(title: "重置本项", image: UIImage(systemName:"arrow.counterclockwise")) { [weak self] _ in guard let self else { return }; self.showMode(self.mode,automaticOrientation:false) },
+            UIAction(title: "重置本项", image: UIImage(systemName:"arrow.counterclockwise")) { [weak self] _ in self?.clearCurrentTest() },
             UIAction(title: metrics.isHidden ? "显示实时数据" : "隐藏实时数据") { [weak self] _ in guard let self else { return }; self.metrics.isHidden.toggle(); self.refreshMenu() },
+            UIAction(title: "隐藏悬浮工具（双指长按恢复）") { [weak self] _ in guard let self else{return};self.metricsWereVisible = !self.metrics.isHidden;self.menuButton.isHidden=true;self.clearButton.isHidden=true;self.metrics.isHidden=true;self.restoreControls.isEnabled=true },
             UIAction(title: "导出原生采样 JSON") { [weak self] _ in self?.exportSamples() },
             UIAction(title: "导出原生采样 CSV") { [weak self] _ in self?.exportSamples(format:"csv") }
         ]
@@ -132,10 +152,23 @@ final class NativeSuiteController: UIViewController {
             UserDefaults.standard.set([Double(menuButton.center.x/view.bounds.width),Double(menuButton.center.y/view.bounds.height)],forKey:key)
         }
     }
+    @objc private func restoreFloatingControls(_ gesture:UILongPressGestureRecognizer) {
+        guard gesture.state == .began else{return}
+        menuButton.isHidden=false;clearButton.isHidden=false;metrics.isHidden = !metricsWereVisible
+        gesture.isEnabled=false
+    }
+    func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldRecognizeSimultaneouslyWith otherGestureRecognizer:UIGestureRecognizer)->Bool {gestureRecognizer === restoreControls || otherGestureRecognizer === restoreControls}
     private func clampMenu() {
         let inset = view.safeAreaInsets
         menuButton.center.x = min(max(inset.left+36,menuButton.center.x),view.bounds.width-inset.right-36)
         menuButton.center.y = min(max(inset.top+20,menuButton.center.y),view.bounds.height-inset.bottom-20)
+        let below=menuButton.frame.maxY+6
+        let y=below+32<=view.bounds.height-inset.bottom ? below : menuButton.frame.minY-38
+        clearButton.frame=CGRect(x:menuButton.frame.minX,y:y,width:64,height:32)
+    }
+    @objc private func clearCurrentTest() {
+        if let resettable=scene as? NativeResettableScene {resettable.resetScene()}
+        else {showMode(mode,automaticOrientation:false)}
     }
     private func exportSamples(format:String="json") {
         guard let surface = scene as? NativeDiagnosticSurface else {
@@ -186,12 +219,15 @@ final class NativeSuiteController: UIViewController {
         let zero:[String:CGFloat] = ["left":0,"top":0,"right":0,"bottom":0,"width":0,"height":0]
         let full:[String:CGFloat] = ["left":0,"top":0,"right":size.width,"bottom":size.height,"width":size.width,"height":size.height]
         let menu=menuButton.convert(menuButton.bounds,to:window)
-        let data:[String:Any] = ["implementation":"UIKit","title":"Touch Test v13 native","modeCount":Self.modes.count,"activeMode":mode,"requestSequence":smokeSequence.isEmpty ? "initial" : smokeSequence,
+        let clear=clearButton.convert(clearButton.bounds,to:window)
+        let version=Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "unknown"
+        let data:[String:Any] = ["implementation":"UIKit","title":"Touch Test \(version) native","version":version,"modeCount":Self.modes.count,"activeMode":mode,"requestSequence":smokeSequence.isEmpty ? "initial" : smokeSequence,
             "layoutStable":stableObservations>=3 && (smokeLandscape == nil || landscape == smokeLandscape) && scene?.bounds.size == view.bounds.size,
             "viewport":["width":size.width,"height":size.height],"viewWidth":view.bounds.width,"viewHeight":view.bounds.height,
             "orientation":view.window?.windowScene?.interfaceOrientation.rawValue ?? 0,"stage":rect(sceneFrame),"app":rect(appFrame),"body":full,"header":zero,"nav":zero,
             "safeInsets":["top":inset.top,"left":inset.left,"bottom":inset.bottom,"right":inset.right],
             "menu":["left":menu.minX,"right":menu.maxX,"top":menu.minY,"bottom":menu.maxY],
+            "clear":["left":clear.minX,"right":clear.maxX,"top":clear.minY,"bottom":clear.maxY],
             "statusBarHidden":view.window?.windowScene?.statusBarManager?.isStatusBarHidden ?? false]
         if let encoded=try? JSONSerialization.data(withJSONObject:data,options:.prettyPrinted) { try? encoded.write(to:folder.appendingPathComponent("layout-evidence.json"),options:.atomic) }
     }

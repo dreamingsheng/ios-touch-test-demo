@@ -2,10 +2,15 @@ import UIKit
 
 // Native UIKit interaction scene. Background art is a local test asset; no HTML,
 // web event forwarding, game SDK, or online game account is used here.
-final class NativeGameScene: UIView, NativeSceneLifecycle {
-    private enum Role { case move, look, control(String), ignored }
+final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene {
+    private enum Role { case move, look, camera, control(String), ignored }
     private let mode: String
-    private let picture: UIImage?
+    private var picture: UIImage?
+    private let practicePictures: [UIImage?]
+    private var backgroundIndex = 0
+    private var backgroundZoom: CGFloat = 1
+    private var hudScale: CGFloat = 1
+    private var hudPreset = 0
     private var controls: [String: NativeHUDControl] = [:]
     private var roles: [ObjectIdentifier: Role] = [:]
     private var previous: [ObjectIdentifier: CGPoint] = [:]
@@ -24,6 +29,28 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
     private var lastTick = CACurrentMediaTime()
     private var lastShot: CFTimeInterval = 0
     private var eventCount = 0
+    private var maximumTouches = 0
+    private var cameraOffset = CGPoint.zero
+    private var lockedTarget: Int?
+    private var signal = ""
+    private var chatMessages = ["系统：进入触控练习场。"]
+    private var coins = 3000
+    private var equipment: [String] = []
+    private var skillLevels = ["skill1": 1, "skill2": 1, "skill3": 1]
+    private var activeUntil: CFTimeInterval = 0
+    private var beganAt = CACurrentMediaTime()
+    private struct Item {
+        let id: String; let name: String; let category: Int; let cost: Int; let symbol: String; let detail: String
+    }
+    private let catalog: [Item] = [
+        Item(id:"sword",name:"练习长剑",category:0,cost:250,symbol:"bolt.fill",detail:"攻击 +20 · 测试购买、装备与出售"),
+        Item(id:"bow",name:"练习战弓",category:0,cost:420,symbol:"arrow.up.right",detail:"攻速 +15% · 练习装备"),
+        Item(id:"staff",name:"练习法杖",category:1,cost:300,symbol:"sparkles",detail:"法术 +40 · 练习装备"),
+        Item(id:"orb",name:"练习法球",category:1,cost:500,symbol:"sun.max.fill",detail:"法术 +70 · 练习装备"),
+        Item(id:"armor",name:"练习护甲",category:2,cost:280,symbol:"shield.fill",detail:"护甲 +60 · 练习装备"),
+        Item(id:"cloak",name:"练习披风",category:2,cost:450,symbol:"shield.lefthalf.filled",detail:"生命 +300 · 练习装备"),
+        Item(id:"boots",name:"练习战靴",category:3,cost:260,symbol:"figure.walk",detail:"移速 +30 · 练习装备"),
+        Item(id:"dash",name:"练习疾步",category:3,cost:480,symbol:"hare.fill",detail:"移动 +45 · 练习装备")]
     private var fireCount = 0
     private var skillCount = 0
     private var cancelledCount = 0
@@ -52,14 +79,19 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         }
     }
     var diagnostics: String {
-        "触点 \(roles.count) · 事件 \(eventCount) · 左轴 \(String(format: "%.2f,%.2f", Double(vector.x), Double(vector.y))) · " +
+        "触点 \(roles.count) · 最大 \(maximumTouches) · 落指 \(Int(stickOrigin.x)),\(Int(stickOrigin.y)) · 事件 \(eventCount) · 左轴 \(String(format: "%.2f,%.2f", Double(vector.x), Double(vector.y))) · " +
         (mode == "aim" ? "开火 \(fireCount) · 弹药 \(magazine)/\(reserve) · \(stance)" : "施放 \(skillCount) · 取消 \(cancelledCount)")
     }
 
     init(mode: String, assetFolder: URL?) {
         self.mode = mode
-        let filename = mode == "aim" ? "shooter-training-v1.png" : "moba-battlefield-v1.png"
-        picture = assetFolder.flatMap { UIImage(contentsOfFile: $0.appendingPathComponent(filename).path) }
+        practicePictures = ["moba-battlefield-v1.png", "shooter-training-v1.png"].map { filename in assetFolder.flatMap { UIImage(contentsOfFile: $0.appendingPathComponent(filename).path) } }
+        let preferences = UserDefaults.standard.dictionary(forKey: "native-game-presentation.\(mode)") ?? [:]
+        backgroundIndex = max(0, min(1, preferences["background"] as? Int ?? (mode == "aim" ? 1 : 0)))
+        backgroundZoom = CGFloat(max(0.55, min(1.25, preferences["zoom"] as? Double ?? 1)))
+        hudScale = CGFloat(max(0.65, min(1.1, preferences["controls"] as? Double ?? 1)))
+        hudPreset = max(0, min(2, preferences["preset"] as? Int ?? 0))
+        picture = practicePictures[backgroundIndex]
         super.init(frame: .zero)
         backgroundColor = .black
         isMultipleTouchEnabled = true
@@ -89,6 +121,22 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
             add("recall", "回城", symbol: "house.fill", size: 40)
             add("heal", "恢复", symbol: "cross.fill", size: 40)
             add("health", "██████████", symbol: nil, size: 90, kind: .bar)
+            add("shop", "金币 3000", symbol: "cart.fill", size: 88, kind: .bar)
+            add("chat", "聊天", symbol: "message.fill", size: 35)
+            add("signal-attack", "进攻", symbol: "flag.fill", size: 34)
+            add("signal-retreat", "撤退", symbol: "arrow.uturn.backward", size: 34)
+            add("signal-gather", "集合", symbol: "person.3.fill", size: 34)
+            add("last-hit", "补刀", symbol: "scope", size: 40)
+            add("tower", "推塔", symbol: "building.2.fill", size: 40)
+            add("eye", "视角", symbol: "eye.fill", size: 38)
+            add("target1", "目标1", symbol: "person.crop.circle.fill", size: 34)
+            add("target2", "目标2", symbol: "person.crop.circle.fill", size: 34)
+            add("target3", "目标3", symbol: "person.crop.circle.fill", size: 34)
+            add("upgrade1", "+", symbol: nil, size: 25)
+            add("upgrade2", "+", symbol: nil, size: 25)
+            add("upgrade3", "+", symbol: nil, size: 25)
+            for slot in 0..<6 { add("equip\(slot)", "空槽", symbol: nil, size: 32, kind: .square) }
+            add("active", "主动", symbol: "wand.and.stars", size: 40)
         }
         startTimer()
         notification = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.clearPressed() }
@@ -101,6 +149,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         control.accessibilityIdentifier = "game-control-\(key)"
         control.isAccessibilityElement = true
         control.accessibilityLabel = title.isEmpty ? "移动轮盘" : title
+        if key == "health" { control.accessibilityTraits = .staticText }
         control.bounds = CGRect(x: 0, y: 0, width: size, height: kind == .bar ? 28 : size)
         control.isUserInteractionEnabled = false
         let pan = UIPanGestureRecognizer(target: self, action: #selector(moveControl(_:)))
@@ -108,7 +157,8 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         control.addGestureRecognizer(pan)
         controls[key] = control; addSubview(control)
     }
-    private var layoutStorageKey: String { "native-game-layout.\(mode).\(bounds.width > bounds.height ? "landscape" : "portrait")" }
+    private var layoutStorageKey: String { "native-game-layout.\(mode).\(bounds.width > bounds.height ? "landscape" : "portrait").preset\(hudPreset)" }
+    private var legacyLayoutStorageKey: String { "native-game-layout.\(mode).\(bounds.width > bounds.height ? "landscape" : "portrait")" }
     private var safeRect: CGRect { bounds.inset(by: UIEdgeInsets(top: safeAreaInsets.top + 5, left: safeAreaInsets.left + 5, bottom: safeAreaInsets.bottom + 5, right: safeAreaInsets.right + 5)) }
 
     override func layoutSubviews() {
@@ -116,7 +166,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         guard bounds.width > 0, bounds.height > 0, bounds.size != lastSize || safeAreaInsets != lastSafe else { return }
         clearPressed(); lastSize = bounds.size; lastSafe = safeAreaInsets
         let r = safeRect, landscape = bounds.width > bounds.height
-        let scale: CGFloat = landscape && bounds.height < 430 ? 0.86 : (bounds.width < 400 ? 0.88 : 1)
+        let scale: CGFloat = (landscape && bounds.height < 430 ? 0.86 : (bounds.width < 400 ? 0.88 : 1)) * hudScale
         for (key, control) in controls {
             let base: CGFloat
             switch key {
@@ -131,14 +181,21 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
             case "fire-left": base = 56
             case "scope": base = 47
             case "settings": base = 34
+            case "shop": base = 88
+            case "chat": base = 35
+            case "signal-attack", "signal-retreat", "signal-gather", "target1", "target2", "target3": base = 34
+            case "eye": base = 38
+            case "last-hit", "tower", "active": base = 40
+            case "upgrade1", "upgrade2", "upgrade3": base = 25
+            case "equip0", "equip1", "equip2", "equip3", "equip4", "equip5": base = 32
             default: base = key == "recall" || key == "heal" ? 40 : 43
             }
-            control.bounds.size = CGSize(width: base * scale, height: control.kind == .bar ? 28 : base * scale)
+            control.bounds.size = CGSize(width: base * scale, height: control.kind == .bar ? max(18,28 * scale) : base * scale)
         }
         func put(_ key: String, _ x: CGFloat, _ y: CGFloat) { controls[key]?.center = CGPoint(x: x, y: y) }
         put("stick", r.minX + 90 * scale, r.maxY - (landscape ? 84 : 110) * scale)
         put("map", r.minX + 42 * scale, r.minY + 43 * scale)
-        put("score", r.midX, r.minY + 15)
+        put("score", r.midX - (landscape ? 0 : 18), r.minY + 15)
         put("settings", r.maxX - 90, r.minY + 20)
         if mode == "aim" {
             put("fire-left", r.minX + 114 * scale, r.minY + 100 * scale)
@@ -154,13 +211,38 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
             put("attack", r.maxX - 51 * scale, r.maxY - 53 * scale)
             put("skill1", r.maxX - 145 * scale, r.maxY - 51 * scale)
             put("skill2", r.maxX - 116 * scale, r.maxY - 132 * scale)
-            put("skill3", r.maxX - 44 * scale, r.maxY - 191 * scale)
+            put("skill3", r.maxX - 44 * scale, r.maxY - 170 * scale)
             put("flash", landscape ? r.maxX - 207 * scale : r.minX + 30 * scale, r.maxY - (landscape ? 42 : 205) * scale)
             put("recall", landscape ? r.midX - 26 * scale : r.minX + 80 * scale, r.maxY - (landscape ? 22 : 205) * scale)
             put("heal", landscape ? r.midX + 26 * scale : r.minX + 130 * scale, r.maxY - (landscape ? 22 : 205) * scale)
             put("health", r.midX, r.midY - 33)
+            put("shop", r.minX + 44, r.minY + 101 * scale)
+            put("chat", r.maxX - 25 * scale, r.minY + 112)
+            put("signal-attack", r.maxX - 100 * scale, r.minY + 66)
+            put("signal-retreat", r.maxX - 142 * scale, r.minY + 66)
+            put("signal-gather", r.maxX - 184 * scale, r.minY + 66)
+            put("eye", r.maxX - 235 * scale, r.minY + 65)
+            for index in 1...3 { put("target\(index)", r.midX + CGFloat(index - 2) * 43 * scale, r.minY + (landscape ? 80 : 182)) }
+            put("last-hit", r.maxX - 112 * scale, r.maxY - 10 * scale)
+            put("tower", r.maxX - 10 * scale, r.maxY - 110 * scale)
+            for index in 1...3 {
+                if let skill = controls["skill\(index)"] { put("upgrade\(index)", skill.center.x - 28 * scale, skill.center.y - 29 * scale) }
+            }
+            for index in 0..<6 { put("equip\(index)", r.minX + CGFloat(20 + index * 36) * scale, r.minY + 137 * scale) }
+            put("active", r.midX + 83 * scale, r.maxY - 25 * scale)
+            if hudPreset == 1 {
+                // Extended spread moves additional targets toward the upper battlefield.
+                for index in 1...3 { put("target\(index)", r.midX + CGFloat(index - 2) * 47 * scale, r.minY + 64 * scale) }
+                put("active", r.midX + 85 * scale, r.maxY - 74 * scale)
+            }
         }
-        let stored = UserDefaults.standard.dictionary(forKey: layoutStorageKey) as? [String: [String: Double]] ?? [:]
+        if hudPreset == 2 {
+            let keep = Set(["map", "score", "settings", "shop", "chat", "signal-attack", "signal-retreat", "signal-gather", "health"])
+            for (key, control) in controls where !keep.contains(key) && !key.hasPrefix("equip") { control.center.x = r.minX + r.maxX - control.center.x }
+        }
+        for control in controls.values { control.center = clamp(control.center, size: control.bounds.size) }
+        let savedLayout = UserDefaults.standard.dictionary(forKey: layoutStorageKey) ?? (hudPreset == 0 ? UserDefaults.standard.dictionary(forKey: legacyLayoutStorageKey) : nil)
+        let stored = savedLayout as? [String: [String: Double]] ?? [:]
         for (key, position) in stored {
             if let x = position["x"], let y = position["y"], let control = controls[key] {
                 control.center = clamp(CGPoint(x: CGFloat(x) * bounds.width, y: CGFloat(y) * bounds.height), size: control.bounds.size)
@@ -190,10 +272,20 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         }
     }
     func resetLayout() {
-        UserDefaults.standard.removeObject(forKey: layoutStorageKey)
+        // An explicit empty preset also overrides an older, migrated layout.
+        UserDefaults.standard.set([String:[String:Double]](), forKey: layoutStorageKey)
         lastSize = .zero; setNeedsLayout(); layoutIfNeeded()
     }
-    func stopScene() { clearPressed(); timer?.invalidate(); timer = nil; settingsPanel?.removeFromSuperview(); settingsPanel = nil }
+    func resetScene() {
+        clearPressed(); settingsPanel?.endEditing(true); settingsPanel?.removeFromSuperview(); settingsPanel = nil
+        editingLayout = false; eventCount = 0; maximumTouches = 0; fireCount = 0; skillCount = 0; cancelledCount = 0
+        magazine = 40; reserve = 180; scoped = false; stance = "站立"; lockedTarget = nil; signal = ""; chatMessages = ["系统：进入触控练习场。"]
+        coins = 3000; equipment.removeAll(); activeUntil = 0; stickOrigin = .zero; player = CGPoint(x:bounds.midX,y:bounds.midY); reticle = player
+        skillLevels = ["skill1":1,"skill2":1,"skill3":1]; controls.values.forEach { $0.selected = false; $0.badge = nil }
+        beganAt = CACurrentMediaTime(); feedback = ""; feedbackUntil = 0; jumpUntil = 0
+        updateAmmo(); refreshEquipment(); startTimer(); setNeedsDisplay()
+    }
+    func stopScene() { clearPressed(); timer?.invalidate(); timer = nil; settingsPanel?.endEditing(true); settingsPanel?.removeFromSuperview(); settingsPanel = nil }
     private func startTimer() {
         guard timer == nil else { return }
         lastTick = CACurrentMediaTime()
@@ -204,6 +296,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
     private func clearPressed() {
         roles.removeAll(); previous.removeAll(); pressed.removeAll(); castVectors.removeAll(); cancelledCasts.removeAll()
         moveID = nil; lookID = nil; vector = .zero
+        cameraOffset = .zero
         controls.values.forEach { $0.pressed = false; $0.stickVector = .zero }
         controls["stick"]?.center = stickHome
         setNeedsDisplay()
@@ -218,19 +311,22 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
             // Match the visible stacking order when the user has moved controls.
             let hit = subviews.reversed().compactMap { item -> String? in
                 guard let control = item as? NativeHUDControl, control.frame.contains(p) else { return nil }
-                return controls.first { $0.value === control && !["stick", "health", "score"].contains($0.key) }?.key
+                return controls.first { $0.value === control && !["stick", "health"].contains($0.key) }?.key
             }.first
             if let key = hit {
                 roles[id] = .control(key); pressed[key, default: []].insert(id); controls[key]?.pressed = true
                 if key == "fire" || key == "fire-left" { shoot(); lastShot = CACurrentMediaTime() }
                 if key.hasPrefix("skill") { castVectors[id] = p }
-            } else if p.x < bounds.width * 0.46 && p.y > safeRect.minY + 55 && moveID == nil {
+                if key == "eye" { roles[id] = .camera }
+            } else if (hudPreset == 2 ? p.x > bounds.width * 0.54 : p.x < bounds.width * 0.46) && p.y > safeRect.minY + 55 && moveID == nil {
                 moveID = id; roles[id] = .move; stickOrigin = p
                 controls["stick"]?.center = p; vector = .zero
             } else if mode == "aim", lookID == nil {
                 lookID = id; roles[id] = .look
             } else { roles[id] = .ignored }
+            maximumTouches = max(maximumTouches, roles.count)
         }
+        accessibilityValue = diagnostics
         setNeedsDisplay()
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -250,6 +346,9 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
                 case .look?:
                     reticle.x = max(0, min(bounds.width, reticle.x + (p.x - old.x) * sensitivity))
                     reticle.y = max(0, min(bounds.height, reticle.y + (p.y - old.y) * sensitivity))
+                case .camera?:
+                    cameraOffset.x = max(-bounds.width * 0.2, min(bounds.width * 0.2, cameraOffset.x + p.x - old.x))
+                    cameraOffset.y = max(-bounds.height * 0.2, min(bounds.height * 0.2, cameraOffset.y + p.y - old.y))
                 case .control(let key)? where key.hasPrefix("skill"):
                     castVectors[id] = p
                     if cancelRect.contains(p) { cancelledCasts.insert(id) } else { cancelledCasts.remove(id) }
@@ -258,6 +357,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
                 previous[id] = p
             }
         }
+        accessibilityValue = diagnostics
         setNeedsDisplay()
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { end(touches, cancelled: false) }
@@ -277,18 +377,38 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
                     case "jump": jumpUntil = CACurrentMediaTime() + 0.4; showFeedback("跳跃")
                     case "settings": showSettings()
                     case "map": showMap()
+                    case "shop": showShop()
+                    case "score": showScoreboard()
+                    case "chat": showChat()
+                    case "signal-attack", "signal-retreat", "signal-gather":
+                        signal = controls[key]?.title ?? "信号"; showFeedback("已发送信号：\(signal)"); appendMessage("信号：\(signal)")
+                    case "upgrade1", "upgrade2", "upgrade3":
+                        let skill = "skill" + String(key.suffix(1))
+                        let level = min(6, (skillLevels[skill] ?? 1) + 1); skillLevels[skill] = level
+                        controls[skill]?.badge = "Lv\(level)"; controls[key]?.selected = level == 6; showFeedback("技能 \(key.suffix(1)) 升至 \(level) 级")
+                    case "last-hit", "tower": skillCount += 1; showFeedback(key == "tower" ? "优先攻击防御塔" : "优先攻击小兵")
+                    case "target1", "target2", "target3":
+                        let target = Int(key.suffix(1)) ?? 1; lockedTarget = lockedTarget == target ? nil : target
+                        for index in 1...3 { controls["target\(index)"]?.selected = lockedTarget == index }; showFeedback(lockedTarget == nil ? "取消目标锁定" : "锁定目标 \(target)")
+                    case "active":
+                        if equipment.isEmpty { showFeedback("先在商店购买装备") }
+                        else if CACurrentMediaTime() < activeUntil { showFeedback("主动装备冷却中") }
+                        else { activeUntil = CACurrentMediaTime() + 5; skillCount += 1; showFeedback("主动装备已使用") }
                     case "skill1", "skill2", "skill3":
                         if cancelledCasts.contains(id) || cancelRect.contains(touch.location(in: self)) { cancelledCount += 1; showFeedback("取消施法") }
                         else { skillCount += 1; showFeedback("\(controls[key]?.title ?? "技能") 施放") }
                     case "attack", "flash", "recall", "heal": skillCount += 1; showFeedback(controls[key]?.title ?? "")
-                    default: break
+                    default:
+                        if key.hasPrefix("equip"), let index = Int(key.dropFirst(5)) { showEquipment(slot: index) }
                     }
                 }
             }
             if id == moveID { moveID = nil; vector = .zero; controls["stick"]?.stickVector = .zero; controls["stick"]?.center = stickHome }
             if id == lookID { lookID = nil }
+            if case .camera? = roles[id] { cameraOffset = .zero; pressed["eye"]?.remove(id); controls["eye"]?.pressed = false }
             castVectors[id] = nil; cancelledCasts.remove(id); roles[id] = nil; previous[id] = nil
         }
+        accessibilityValue = diagnostics
         setNeedsDisplay()
     }
     private func shoot() {
@@ -306,17 +426,28 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         if mode == "aim", (!(pressed["fire"]?.isEmpty ?? true) || !(pressed["fire-left"]?.isEmpty ?? true)), now - lastShot >= 0.1 {
             shoot(); lastShot = now
         }
+        if mode == "moba" {
+            let seconds = Int(now - beganAt)
+            controls["score"]?.title = "练习 0:0 \(String(format:"%02d:%02d", seconds / 60, seconds % 60))"
+            controls["active"]?.badge = activeUntil > now ? String(Int(ceil(activeUntil - now))) : nil
+        }
         if moveID != nil || !castVectors.isEmpty || feedbackUntil > now || mode == "aim" { setNeedsDisplay() }
     }
     private var cancelRect: CGRect { CGRect(x: safeRect.maxX - 91, y: safeRect.minY + 55, width: 64, height: 64) }
 
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
+        UIColor(red: mode == "aim" ? 0.30 : 0.10, green: mode == "aim" ? 0.37 : 0.21, blue: mode == "aim" ? 0.28 : 0.17, alpha: 1).setFill(); context.fill(bounds)
         if let picture {
             let ratio = max(bounds.width / picture.size.width, bounds.height / picture.size.height)
             let size = CGSize(width: picture.size.width * ratio, height: picture.size.height * ratio)
-            picture.draw(in: CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height))
-        } else { UIColor(white: 0.14, alpha: 1).setFill(); context.fill(bounds) }
+            // A low-contrast cover layer always fills the window. Shrinking the
+            // foreground reveals that extended scene, never a black letterbox.
+            picture.draw(in: CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height), blendMode: .normal, alpha: 0.40)
+            let fit = min(bounds.width / picture.size.width, bounds.height / picture.size.height) * backgroundZoom
+            let foreground = CGSize(width: picture.size.width * fit, height: picture.size.height * fit)
+            picture.draw(in: CGRect(x: bounds.midX - foreground.width / 2 + cameraOffset.x, y: bounds.midY - foreground.height / 2 + cameraOffset.y, width: foreground.width, height: foreground.height))
+        }
         if mode == "aim" {
             if scoped {
                 context.saveGState()
@@ -337,6 +468,12 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
             let avatar = CGRect(x: player.x - 14, y: player.y - 14, width: 28, height: 28)
             UIColor.systemCyan.withAlphaComponent(0.65).setFill(); context.fillEllipse(in: avatar)
             context.setStrokeColor(UIColor.white.cgColor); context.setLineWidth(2); context.strokeEllipse(in: avatar)
+            if let target = lockedTarget {
+                let targetPoint = CGPoint(x: bounds.width * (0.52 + CGFloat(target) * 0.08), y: bounds.height * 0.39)
+                context.setStrokeColor(UIColor.systemRed.cgColor); context.setLineWidth(2)
+                context.strokeEllipse(in: CGRect(x: targetPoint.x-19, y: targetPoint.y-19, width: 38, height: 38))
+                context.move(to: player); context.addLine(to: targetPoint); context.strokePath()
+            }
             for (id, point) in castVectors {
                 let origin: CGPoint
                 if case .control(let key)? = roles[id] { origin = controls[key]?.center ?? point } else { origin = point }
@@ -362,6 +499,116 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         }
     }
 
+    private func savePresentation() {
+        let preferences: [String:Any] = ["background":backgroundIndex,"zoom":Double(backgroundZoom),"controls":Double(hudScale),"preset":hudPreset]
+        UserDefaults.standard.set(preferences, forKey:"native-game-presentation.\(mode)")
+    }
+    private func refreshEquipment() {
+        controls["shop"]?.title = "金币 \(coins)"
+        for index in 0..<6 {
+            let item = index < equipment.count ? catalog.first(where: { $0.id == equipment[index] }) : nil
+            controls["equip\(index)"]?.title = item == nil ? "空槽" : "装备\(index+1)"
+            controls["equip\(index)"]?.symbol = item?.symbol
+            controls["equip\(index)"]?.accessibilityLabel = item?.name ?? "空装备槽 \(index+1)"
+        }
+    }
+    private func appendMessage(_ text:String) {
+        chatMessages.append(String(text.prefix(180)))
+        if chatMessages.count > 50 { chatMessages.removeFirst(chatMessages.count-50) }
+    }
+    private func panel(title: String) -> (UIView, UIStackView) {
+        clearPressed(); settingsPanel?.removeFromSuperview()
+        let overlay = UIView(frame: bounds); overlay.autoresizingMask = [.flexibleWidth,.flexibleHeight]; overlay.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        overlay.accessibilityIdentifier = "game-panel-\(title)"
+        let sheet = UIView(); sheet.translatesAutoresizingMaskIntoConstraints = false; sheet.backgroundColor = UIColor(red:0.08,green:0.12,blue:0.18,alpha:0.98); sheet.layer.cornerRadius = 12; overlay.addSubview(sheet)
+        NSLayoutConstraint.activate([sheet.topAnchor.constraint(equalTo:overlay.safeAreaLayoutGuide.topAnchor,constant:44),sheet.bottomAnchor.constraint(equalTo:overlay.keyboardLayoutGuide.topAnchor,constant:-10),sheet.centerXAnchor.constraint(equalTo:overlay.centerXAnchor),sheet.widthAnchor.constraint(equalTo:overlay.safeAreaLayoutGuide.widthAnchor,multiplier:0.9)])
+        let scroll = UIScrollView(); scroll.translatesAutoresizingMaskIntoConstraints = false; scroll.keyboardDismissMode = .interactive; sheet.addSubview(scroll)
+        NSLayoutConstraint.activate([scroll.leadingAnchor.constraint(equalTo:sheet.leadingAnchor),scroll.trailingAnchor.constraint(equalTo:sheet.trailingAnchor),scroll.topAnchor.constraint(equalTo:sheet.topAnchor),scroll.bottomAnchor.constraint(equalTo:sheet.bottomAnchor)])
+        let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 12; stack.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(stack)
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo:scroll.contentLayoutGuide.leadingAnchor,constant:16),stack.trailingAnchor.constraint(equalTo:scroll.contentLayoutGuide.trailingAnchor,constant:-16),stack.topAnchor.constraint(equalTo:scroll.contentLayoutGuide.topAnchor,constant:14),stack.bottomAnchor.constraint(equalTo:scroll.contentLayoutGuide.bottomAnchor,constant:-14),stack.widthAnchor.constraint(equalTo:scroll.frameLayoutGuide.widthAnchor,constant:-32)])
+        let header = UIStackView(); header.axis = .horizontal; header.alignment = .center; header.spacing = 14
+        let label = UILabel(); label.text = title; label.textColor = .white; label.font = .boldSystemFont(ofSize:19); header.addArrangedSubview(label)
+        let close = actionButton("返回游戏") { [weak self, weak overlay] in overlay?.endEditing(true); overlay?.removeFromSuperview(); self?.settingsPanel = nil }; header.addArrangedSubview(close); stack.addArrangedSubview(header)
+        settingsPanel = overlay; addSubview(overlay); return (overlay,stack)
+    }
+    private func actionButton(_ title: String, action: @escaping () -> Void) -> UIButton {
+        let button = UIButton(type:.system); button.setTitle(title,for:.normal); button.setTitleColor(.white,for:.normal); button.titleLabel?.font = .systemFont(ofSize:14); button.titleLabel?.numberOfLines = 0
+        button.backgroundColor = UIColor.white.withAlphaComponent(0.08); button.layer.cornerRadius = 7; button.layer.borderWidth = 0.5; button.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        button.contentEdgeInsets = UIEdgeInsets(top:10,left:12,bottom:10,right:12)
+        button.addAction(UIAction { _ in action() },for:.touchUpInside); return button
+    }
+    private func note(_ text: String) -> UILabel {
+        let label = UILabel(); label.text = text; label.textColor = UIColor.white.withAlphaComponent(0.8); label.font = .systemFont(ofSize:13); label.numberOfLines = 0; return label
+    }
+    private func showShop() {
+        let (_, stack) = panel(title:"金币商店 · 练习装备")
+        let gold = note("金币 \(coins) · 装备 \(equipment.count)/6"); gold.accessibilityIdentifier = "shop-gold"; stack.addArrangedSubview(gold)
+        let categories = UISegmentedControl(items:["攻击","法术","防御","移动"]); categories.selectedSegmentIndex = 0; categories.selectedSegmentTintColor = .systemYellow; stack.addArrangedSubview(categories)
+        let grid = UIStackView(); grid.axis = .vertical; grid.spacing = 10; stack.addArrangedSubview(grid)
+        rebuildShop(grid,category:0,gold:gold)
+        categories.addAction(UIAction { [weak self, weak categories, weak grid, weak gold] _ in guard let self, let grid, let gold else { return }; self.rebuildShop(grid,category:categories?.selectedSegmentIndex ?? 0,gold:gold) },for:.valueChanged)
+        stack.addArrangedSubview(actionButton("重置练习金币和装备") { [weak self, weak grid, weak gold, weak categories] in guard let self, let grid, let gold else { return }; self.coins = 3000; self.equipment.removeAll(); self.refreshEquipment(); self.rebuildShop(grid,category:categories?.selectedSegmentIndex ?? 0,gold:gold) })
+        stack.addArrangedSubview(note("本商店只使用练习金币。购买后点屏幕左侧装备槽可查看、出售；主动装备有独立冷却反馈。"))
+    }
+    private func rebuildShop(_ grid:UIStackView,category:Int,gold:UILabel) {
+        grid.arrangedSubviews.forEach { grid.removeArrangedSubview($0); $0.removeFromSuperview() }
+        gold.text = "金币 \(coins) · 装备 \(equipment.count)/6"
+        let items = catalog.filter { $0.category == category }
+        for start in stride(from:0,to:items.count,by:2) {
+            let row = UIStackView(); row.axis = .horizontal; row.distribution = .fillEqually; row.spacing = 10
+            for item in items[start..<min(start+2,items.count)] {
+                let button = actionButton("\(item.name)  ¥\(item.cost)\n\(item.detail)\n购买") { [weak self, weak grid, weak gold] in
+                    guard let self, let grid, let gold else { return }
+                    guard self.equipment.count < 6, self.coins >= item.cost else { return }
+                    self.coins -= item.cost; self.equipment.append(item.id); self.refreshEquipment(); self.rebuildShop(grid,category:category,gold:gold)
+                }
+                button.accessibilityIdentifier = "shop-buy-\(item.id)"; button.isEnabled = equipment.count < 6 && coins >= item.cost; button.alpha = button.isEnabled ? 1 : 0.4; row.addArrangedSubview(button)
+                button.heightAnchor.constraint(greaterThanOrEqualToConstant:92).isActive = true
+            }
+            grid.addArrangedSubview(row)
+        }
+    }
+    private func showEquipment(slot:Int) {
+        guard slot < equipment.count, let item = catalog.first(where:{ $0.id == equipment[slot] }) else { showShop(); return }
+        let (overlay,stack) = panel(title:"装备槽 \(slot+1) · \(item.name)")
+        stack.addArrangedSubview(note("\(item.detail)\n练习价格 \(item.cost)，出售返还 \(item.cost * 3 / 5) 金币。"))
+        stack.addArrangedSubview(actionButton("出售装备") { [weak self, weak overlay] in guard let self,slot < self.equipment.count else { return }; self.coins += item.cost * 3 / 5; self.equipment.remove(at:slot); self.refreshEquipment(); overlay?.removeFromSuperview(); self.settingsPanel = nil; self.showFeedback("已出售 \(item.name)") })
+        stack.addArrangedSubview(actionButton("使用主动装备") { [weak self, weak overlay] in guard let self else { return }; if CACurrentMediaTime() >= self.activeUntil { self.activeUntil = CACurrentMediaTime()+5; self.skillCount += 1; self.showFeedback("主动装备已使用") }; overlay?.removeFromSuperview(); self.settingsPanel = nil })
+    }
+    private func showScoreboard() {
+        let (_,stack) = panel(title:"比分与战绩")
+        let tabs = UISegmentedControl(items:["战绩","属性","经济"]); tabs.selectedSegmentIndex = 0; tabs.selectedSegmentTintColor = .systemYellow; stack.addArrangedSubview(tabs)
+        let detail = note("练习对局 0 : 0 · 技能施放 \(skillCount) · 信号 \(signal.isEmpty ? "未发送" : signal)"); stack.addArrangedSubview(detail)
+        let rows = UIStackView(); rows.axis = .vertical; rows.spacing = 6; stack.addArrangedSubview(rows)
+        func populate(_ index:Int) {
+            rows.arrangedSubviews.forEach { rows.removeArrangedSubview($0); $0.removeFromSuperview() }
+            for team in 0..<2 { for playerIndex in 1...5 {
+                let suffix = index == 0 ? "0 / 0 / 0" : index == 1 ? "等级 1 · 生命 100%" : "金币 \(team == 0 && playerIndex == 1 ? coins : 3000)"
+                let row = actionButton("\(team == 0 ? "蓝方" : "红方") 练习英雄 \(playerIndex)     \(suffix)") { [weak self, weak detail] in guard let self else { return }; self.lockedTarget = (playerIndex-1)%3+1; detail?.text = "已选中\(team == 0 ? "蓝方" : "红方")英雄 \(playerIndex)，目标头像 \(self.lockedTarget ?? 1) 已锁定。" }
+                row.backgroundColor = (team == 0 ? UIColor.systemBlue : UIColor.systemRed).withAlphaComponent(0.18); rows.addArrangedSubview(row)
+            } }
+        }
+        populate(0)
+        tabs.addAction(UIAction { [weak self, weak tabs, weak rows, weak detail] _ in
+            guard let self,let rows,let detail else { return }
+            rows.arrangedSubviews.forEach { rows.removeArrangedSubview($0); $0.removeFromSuperview() }
+            let index = tabs?.selectedSegmentIndex ?? 0
+            for team in 0..<2 { for playerIndex in 1...5 {
+                let suffix = index == 0 ? "0 / 0 / 0" : index == 1 ? "等级 1 · 生命 100%" : "金币 \(team == 0 && playerIndex == 1 ? self.coins : 3000)"
+                rows.addArrangedSubview(self.actionButton("\(team == 0 ? "蓝方" : "红方") 练习英雄 \(playerIndex)     \(suffix)") { [weak self, weak detail] in self?.lockedTarget = (playerIndex-1)%3+1; detail?.text = "选择英雄 \(playerIndex)，已锁定对应练习目标。" })
+            } }
+        },for:.valueChanged)
+    }
+    private func showChat() {
+        let (_,stack) = panel(title:"队伍聊天与信号")
+        let log = note(chatMessages.joined(separator:"\n")); log.accessibilityIdentifier = "game-chat-log"; stack.addArrangedSubview(log)
+        let row = UIStackView(); row.axis = .horizontal; row.spacing = 10
+        let field = UITextField(); field.borderStyle = .roundedRect; field.placeholder = "输入练习消息…"; field.backgroundColor = .white; field.textColor = .black; field.font = .systemFont(ofSize:16); field.accessibilityIdentifier = "game-chat-input"; row.addArrangedSubview(field)
+        let send = actionButton("发送") { [weak self, weak field, weak log] in guard let self,let field,let log else { return }; let text = (field.text ?? "").trimmingCharacters(in:.whitespacesAndNewlines); guard !text.isEmpty else { return }; self.appendMessage("我："+String(text.prefix(160))); log.text = self.chatMessages.joined(separator:"\n"); field.text = ""; field.resignFirstResponder() }; send.accessibilityIdentifier = "game-chat-send"; row.addArrangedSubview(send); stack.addArrangedSubview(row)
+        for text in ["进攻","撤退","集合","技能准备就绪","请求支援"] {
+            stack.addArrangedSubview(actionButton("发送信号："+text) { [weak self, weak log] in guard let self else { return }; self.signal = text; self.appendMessage("信号："+text); log?.text = self.chatMessages.joined(separator:"\n"); self.showFeedback("已发送："+text) })
+        }
+    }
     private func showSettings() {
         clearPressed(); settingsPanel?.removeFromSuperview()
         let overlay = UIView(frame: bounds); overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]; overlay.backgroundColor = UIColor.black.withAlphaComponent(0.55)
@@ -373,16 +620,31 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
         let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 14; stack.translatesAutoresizingMaskIntoConstraints = false; scroll.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 18), stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -18), stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 15), stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -12), stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -36)])
         let title = UILabel(); title.text = "游戏设置"; title.textColor = .white; title.font = .boldSystemFont(ofSize: 20); stack.addArrangedSubview(title)
-        let section = UISegmentedControl(items: ["操作", "布局", "灵敏度"]); section.selectedSegmentIndex = 0; section.selectedSegmentTintColor = .systemYellow; stack.addArrangedSubview(section)
+        let section = UISegmentedControl(items: ["操作", "布局", "灵敏度", "画面"]); section.selectedSegmentIndex = 0; section.selectedSegmentTintColor = .systemYellow; stack.addArrangedSubview(section)
         let description = UILabel(); description.textColor = .white; description.numberOfLines = 0; description.font = .systemFont(ofSize: 13); description.text = "浮动轮盘：左侧落指后出现，移动与技能/瞄准独立响应。"; stack.addArrangedSubview(description)
         let sensitivitySlider = UISlider(); sensitivitySlider.minimumValue = 0.25; sensitivitySlider.maximumValue = 2; sensitivitySlider.value = Float(sensitivity); sensitivitySlider.isHidden = true
         sensitivitySlider.addAction(UIAction { [weak self, weak sensitivitySlider, weak description] _ in guard let slider = sensitivitySlider else { return }; self?.sensitivity = CGFloat(slider.value); description?.text = "瞄准灵敏度 \(Int(slider.value * 100))%" }, for: .valueChanged); stack.addArrangedSubview(sensitivitySlider)
         let edit = UIButton(type: .system); edit.setTitle(editingLayout ? "完成布局编辑" : "移动按钮与菜单", for: .normal); edit.setTitleColor(.systemYellow, for: .normal)
         edit.addAction(UIAction { [weak self, weak overlay] _ in guard let self else { return }; self.editingLayout.toggle(); overlay?.removeFromSuperview(); self.settingsPanel = nil }, for: .touchUpInside); stack.addArrangedSubview(edit)
         let reset = UIButton(type: .system); reset.setTitle("恢复默认键位", for: .normal); reset.addAction(UIAction { [weak self] _ in self?.resetLayout() }, for: .touchUpInside); stack.addArrangedSubview(reset)
-        section.addAction(UIAction { [weak section, weak description, weak sensitivitySlider, weak edit, weak reset] _ in
+        let layoutOptions = UIStackView(); layoutOptions.axis = .vertical; layoutOptions.spacing = 10; layoutOptions.isHidden = true; stack.addArrangedSubview(layoutOptions)
+        layoutOptions.addArrangedSubview(note("键位预设：每套布局和横竖屏分别保存。"))
+        let presets = UISegmentedControl(items:["标准","扩展","左手"]); presets.selectedSegmentIndex = hudPreset; presets.selectedSegmentTintColor = .systemYellow; presets.accessibilityIdentifier = "game-hud-preset"; layoutOptions.addArrangedSubview(presets)
+        presets.addAction(UIAction { [weak self, weak presets] _ in guard let self else { return }; self.hudPreset = presets?.selectedSegmentIndex ?? 0; self.savePresentation(); self.lastSize = .zero; self.setNeedsLayout(); self.layoutIfNeeded() },for:.valueChanged)
+        let sizeLabel = note("控件大小 \(Int(hudScale * 100))%"); layoutOptions.addArrangedSubview(sizeLabel)
+        let controlSize = UISlider(); controlSize.minimumValue = 0.65; controlSize.maximumValue = 1.1; controlSize.value = Float(hudScale); controlSize.accessibilityIdentifier = "game-hud-scale"; layoutOptions.addArrangedSubview(controlSize)
+        controlSize.addAction(UIAction { [weak self, weak controlSize, weak sizeLabel] _ in guard let self,let slider = controlSize else { return }; self.hudScale = CGFloat(slider.value); sizeLabel?.text = "控件大小 \(Int(slider.value*100))%"; self.savePresentation(); self.lastSize = .zero; self.setNeedsLayout(); self.layoutIfNeeded() },for:.valueChanged)
+        let sceneOptions = UIStackView(); sceneOptions.axis = .vertical; sceneOptions.spacing = 10; sceneOptions.isHidden = true; stack.addArrangedSubview(sceneOptions)
+        sceneOptions.addArrangedSubview(note("背景均为本地练习场景素材；不代表真实游戏地图。"))
+        let background = UISegmentedControl(items:["峡谷练习","训练练习"]); background.selectedSegmentIndex = backgroundIndex; background.selectedSegmentTintColor = .systemYellow; background.accessibilityIdentifier = "game-background-picker"; sceneOptions.addArrangedSubview(background)
+        background.addAction(UIAction { [weak self, weak background] _ in guard let self else { return }; self.backgroundIndex = background?.selectedSegmentIndex ?? 0; self.picture = self.practicePictures[self.backgroundIndex]; self.controls["map"]?.mapImage = self.picture; self.savePresentation(); self.setNeedsDisplay() },for:.valueChanged)
+        let zoomLabel = note("背景缩放 \(Int(backgroundZoom*100))%"); sceneOptions.addArrangedSubview(zoomLabel)
+        let zoom = UISlider(); zoom.minimumValue = 0.55; zoom.maximumValue = 1.25; zoom.value = Float(backgroundZoom); zoom.accessibilityIdentifier = "game-background-zoom"; sceneOptions.addArrangedSubview(zoom)
+        zoom.addAction(UIAction { [weak self, weak zoom, weak zoomLabel] _ in guard let self,let slider = zoom else { return }; self.backgroundZoom = CGFloat(slider.value); zoomLabel?.text = "背景缩放 \(Int(slider.value*100))%"; self.savePresentation(); self.setNeedsDisplay() },for:.valueChanged)
+        section.addAction(UIAction { [weak section, weak description, weak sensitivitySlider, weak edit, weak reset, weak layoutOptions, weak sceneOptions] _ in
             let index = section?.selectedSegmentIndex ?? 0; sensitivitySlider?.isHidden = index != 2; edit?.isHidden = index != 1; reset?.isHidden = index != 1
-            description?.text = index == 0 ? "浮动轮盘：左侧落指后出现，移动与技能/瞄准独立响应。" : index == 1 ? "进入编辑后拖动轮盘、技能、开火、地图和菜单；横竖屏分别保存。" : "拖动滑块调整瞄准位移倍率；100% 保持手指实际位移。"
+            layoutOptions?.isHidden = index != 1; sceneOptions?.isHidden = index != 3
+            description?.text = index == 0 ? "浮动轮盘：落指后出现，移动与技能/瞄准独立响应。" : index == 1 ? "拖动全部 HUD 调整位置。控件大小同时改变可见区域和实际命中区域。" : index == 2 ? "拖动滑块调整瞄准位移倍率；100% 保持手指实际位移。" : "缩小背景会露出同色延展场景，画面始终覆盖整个窗口。"
         }, for: .valueChanged)
         edit.isHidden = true; reset.isHidden = true
         let close = UIButton(type: .system); close.setTitle("返回游戏", for: .normal); close.setTitleColor(.white, for: .normal); close.addAction(UIAction { [weak self, weak overlay] _ in overlay?.removeFromSuperview(); self?.settingsPanel = nil }, for: .touchUpInside); stack.addArrangedSubview(close)
@@ -399,8 +661,9 @@ final class NativeGameScene: UIView, NativeSceneLifecycle {
 
 private final class NativeHUDControl: UIView {
     enum Kind { case circle, square, bar, stick }
-    var title: String { didSet { setNeedsDisplay() } }
-    let symbol: String?
+    var title: String { didSet { if oldValue != title { accessibilityLabel = title; setNeedsDisplay() } } }
+    var symbol: String? { didSet { if oldValue != symbol { setNeedsDisplay() } } }
+    var badge: String? { didSet { if oldValue != badge { setNeedsDisplay() } } }
     let kind: Kind
     var pressed = false { didSet { setNeedsDisplay() } }
     var selected = false { didSet { setNeedsDisplay() } }
@@ -434,6 +697,11 @@ private final class NativeHUDControl: UIView {
             (title as NSString).draw(in: CGRect(x: 1, y: bounds.maxY - 18, width: bounds.width - 2, height: 14), withAttributes: [.font: UIFont.systemFont(ofSize: bounds.width < 50 ? 9 : 10), .foregroundColor: UIColor.white, .paragraphStyle: style])
         } else {
             (title as NSString).draw(in: CGRect(x: 3, y: bounds.midY - 7, width: bounds.width - 6, height: 18), withAttributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium), .foregroundColor: UIColor.white, .paragraphStyle: style])
+        }
+        if let badge {
+            let badgeRect = CGRect(x:bounds.maxX-28,y:0,width:28,height:14)
+            UIColor.black.withAlphaComponent(0.7).setFill(); context.fill(badgeRect)
+            (badge as NSString).draw(in:badgeRect,withAttributes:[.font:UIFont.boldSystemFont(ofSize:9),.foregroundColor:UIColor.systemYellow,.paragraphStyle:style])
         }
     }
 }

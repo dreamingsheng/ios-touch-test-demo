@@ -78,7 +78,11 @@ final class NativeSuiteUITests: XCTestCase {
             metrics.label.contains("触点 0") && (self.retainedSamples(in: metrics.label) ?? 0) > 0
         }
         XCTAssertGreaterThan(retainedSamples(in: metrics.label) ?? 0, 0)
+        canvas.pinch(withScale:1.3,velocity:1.5)
+        wait("Two real fingers must be tracked independently") {metrics.label.contains("最大 2")}
         attachScreenshot("native-multi-sampled")
+        identified("native-clear").tap()
+        wait("Clear must reset this trial's retained samples") {(self.retainedSamples(in:metrics.label) ?? -1)==0}
     }
 
     func testNativeTypingKeepsInsertionAreaAboveKeyboard() {
@@ -125,6 +129,9 @@ final class NativeSuiteUITests: XCTestCase {
         let scrollView = app.scrollViews.firstMatch
         XCTAssertTrue(scrollView.waitForExistence(timeout: 5))
         XCTAssertTrue(scrollView.isHittable)
+        let picture=identified("native-photo-image"),window=app.windows.firstMatch
+        XCTAssertLessThanOrEqual(picture.frame.width,window.frame.width*0.82)
+        XCTAssertLessThanOrEqual(picture.frame.height,window.frame.height*0.62)
 
         let scaleBefore=String(describing:scrollView.value)
         scrollView.pinch(withScale: 1.8, velocity: 1.2)
@@ -132,6 +139,47 @@ final class NativeSuiteUITests: XCTestCase {
         XCTAssertTrue(scene.exists)
         XCTAssertTrue(app.state == .runningForeground)
         attachScreenshot("native-photo-pinched")
+        identified("photo-change").tap()
+        app.buttons["战场细节"].tap()
+        wait("Built-in photo must change") {picture.label.contains("战场细节")}
+        identified("native-clear").tap()
+        wait("Clear must reset zoom while retaining the selected photo") {picture.label.contains("战场细节") && String(describing:picture.value).contains("scale 1.00")}
+    }
+
+    func testNativeReaderDefaultsToVerticalScrolling() {
+        launch(mode:"read")
+        let article=identified("native-reader-scroll")
+        let before=String(describing:article.value)
+        article.swipeUp()
+        wait("Default reader must scroll vertically through the text") {String(describing:article.value) != before}
+        attachScreenshot("native-reader-scrolled")
+    }
+
+    func testNativeGameFloatingStickAndMovableSavedLayout() {
+        launch(mode:"moba")
+        wait("Game must enter landscape") {self.app.windows.firstMatch.frame.width>self.app.windows.firstMatch.frame.height}
+        let window=app.windows.firstMatch,frame=window.frame
+        let start=window.coordinate(withNormalizedOffset:CGVector(dx:0.22,dy:0.66))
+        start.press(forDuration:0.05,thenDragTo:window.coordinate(withNormalizedOffset:CGVector(dx:0.30,dy:0.55)))
+        let metrics=identified("native-metrics")
+        let expectedX=Int(frame.width*0.22),expectedY=Int(frame.height*0.66)
+        wait("Floating joystick must use the actual left-hand landing point") {
+            let value=metrics.label
+            return (-2...2).contains {dx in (-2...2).contains{dy in value.contains("落指 \(expectedX+dx),\(expectedY+dy)")}}
+        }
+        identified("game-control-settings").tap()
+        app.segmentedControls.buttons["布局"].tap()
+        app.buttons["移动按钮与菜单"].tap()
+        let skill=identified("game-control-skill1"),original=skill.frame
+        let origin=skill.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        origin.press(forDuration:0.1,thenDragTo:origin.withOffset(CGVector(dx:-28,dy:-24)))
+        wait("Native HUD must move with the drag") {abs(skill.frame.midX-original.midX+28)<3 && abs(skill.frame.midY-original.midY+24)<3}
+        let moved=skill.frame
+        app.terminate();launch(mode:"moba")
+        wait("Game must return to landscape") {self.app.windows.firstMatch.frame.width>self.app.windows.firstMatch.frame.height}
+        let restored=identified("game-control-skill1")
+        wait("Edited native HUD position must survive relaunch") {abs(restored.frame.midX-moved.midX)<3 && abs(restored.frame.midY-moved.midY)<3}
+        attachScreenshot("native-moba-layout-restored")
     }
 
     func testNativeGameRequestsLandscapeAndOpensNativeSettings() {

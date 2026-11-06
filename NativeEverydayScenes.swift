@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import PhotosUI
 
 /// Implemented by scenes that own active resources (player, keyboard, observers).
 /// `NativeSuiteController` should call this before removing the current scene.
@@ -98,11 +99,19 @@ private enum EverydayTheme {
 
 // MARK: - Pinch / photo
 
-private final class NativePhotoZoomView: UIView, UIScrollViewDelegate {
+private final class NativePhotoZoomView: UIView, UIScrollViewDelegate, PHPickerViewControllerDelegate, NativeSceneLifecycle, NativeResettableScene {
     private let scrollView = UIScrollView()
     private let imageView = UIImageView()
     private let heading = EverydayTheme.title("双指缩放照片", detail: "双指缩放、拖动并快速改变方向，检查手势连续性")
+    private let changeButton = EverydayTheme.button("更换图片", image: "photo.on.rectangle")
+    private let resetButton = EverydayTheme.button("复位", image: "arrow.counterclockwise")
+    private let sizeSlider = UISlider()
+    private let zoomLabel = UILabel()
     private var lastContainerSize: CGSize = .zero
+    private var builtInImages: [(name: String, image: UIImage)] = []
+    private var selectedBuiltInIndex: Int?
+    private weak var presentedPicker: PHPickerViewController?
+    private var sceneIsActive = true
 
     init(assetFolder: URL?) {
         super.init(frame: .zero)
@@ -110,22 +119,60 @@ private final class NativePhotoZoomView: UIView, UIScrollViewDelegate {
         isMultipleTouchEnabled = true
 
         scrollView.delegate = self
-        scrollView.minimumZoomScale = 1
+        scrollView.minimumZoomScale = 0.25
         scrollView.maximumZoomScale = 8
         scrollView.bouncesZoom = true
         scrollView.decelerationRate = .fast
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.showsVerticalScrollIndicator = false
+        // Keep the scroll view as a container so the image's own stable
+        // accessibility identifier and live zoom value remain discoverable.
+        scrollView.isAccessibilityElement = false
+        scrollView.accessibilityIdentifier = "photo-zoom-canvas"
+        scrollView.accessibilityLabel = "图片缩放画布"
         addSubview(scrollView)
 
-        imageView.contentMode = .scaleAspectFill
+        imageView.contentMode = .scaleAspectFit
         imageView.clipsToBounds = true
-        imageView.backgroundColor = .black
+        imageView.backgroundColor = UIColor(white: 0.06, alpha: 1)
+        imageView.layer.cornerRadius = 8
+        imageView.layer.borderWidth = 1
+        imageView.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
         imageView.isUserInteractionEnabled = true
-        imageView.image = NativePhotoZoomView.loadPhoto(from: assetFolder) ?? NativePhotoZoomView.placeholderPhoto()
+        imageView.isAccessibilityElement = true
+        imageView.accessibilityIdentifier = "native-photo-image"
+        imageView.accessibilityLabel = "当前缩放测试图片"
+        builtInImages = NativePhotoZoomView.loadBuiltInImages(from: assetFolder)
+        selectedBuiltInIndex = 0
+        imageView.image = builtInImages[0].image
         scrollView.addSubview(imageView)
         addSubview(heading)
+
+        changeButton.accessibilityIdentifier = "photo-change"
+        changeButton.showsMenuAsPrimaryAction = true
+        addSubview(changeButton)
+        resetButton.accessibilityIdentifier = "photo-reset"
+        resetButton.addTarget(self, action: #selector(resetPhoto), for: .touchUpInside)
+        addSubview(resetButton)
+
+        sizeSlider.minimumValue = 0.25
+        sizeSlider.maximumValue = 8
+        sizeSlider.value = 1
+        sizeSlider.minimumTrackTintColor = .white
+        sizeSlider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.32)
+        sizeSlider.accessibilityIdentifier = "photo-size"
+        sizeSlider.accessibilityLabel = "图片显示大小"
+        sizeSlider.addTarget(self, action: #selector(sizeSliderChanged), for: .valueChanged)
+        addSubview(sizeSlider)
+        zoomLabel.textColor = .white
+        zoomLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        zoomLabel.textAlignment = .center
+        zoomLabel.backgroundColor = UIColor.black.withAlphaComponent(0.60)
+        zoomLabel.layer.cornerRadius = 9
+        zoomLabel.clipsToBounds = true
+        addSubview(zoomLabel)
+        rebuildImageMenu()
 
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped(_:)))
         doubleTap.numberOfTapsRequired = 2
@@ -142,26 +189,27 @@ private final class NativePhotoZoomView: UIView, UIScrollViewDelegate {
                                y: safe.top + 10,
                                width: max(150, bounds.width - safe.left - safe.right - 96),
                                height: 58)
-        // Only rebuild the base geometry when the actual container size changes
-        // (initial layout or rotation). Zoom callbacks must never reset the image.
+        changeButton.frame = CGRect(x: safe.left + 12, y: safe.top + 78, width: 128, height: 40)
+        resetButton.frame = CGRect(x: changeButton.frame.maxX + 8, y: changeButton.frame.minY, width: 92, height: 40)
+        let sliderBottom = bounds.height - safe.bottom - 18
+        sizeSlider.frame = CGRect(x: safe.left + 18, y: sliderBottom - 34,
+                                  width: max(150, bounds.width - safe.left - safe.right - 36), height: 30)
+        zoomLabel.frame = CGRect(x: safe.left + 18, y: sizeSlider.frame.minY - 28, width: 100, height: 24)
+
+        // Only rebuild base geometry when the container actually changes
+        // (initial layout or rotation). Routine zoom layout never resets it.
         if bounds.size != lastContainerSize, bounds.width > 0, bounds.height > 0 {
-            let source = imageView.image?.size ?? bounds.size
-            let fillScale = max(bounds.width / max(source.width, 1), bounds.height / max(source.height, 1))
-            let filled = CGSize(width: source.width * fillScale, height: source.height * fillScale)
-            scrollView.setZoomScale(1, animated: false)
-            imageView.transform = .identity
-            imageView.frame = CGRect(origin: .zero, size: filled)
-            scrollView.contentSize = filled
-            scrollView.contentInset = .zero
-            scrollView.contentOffset = CGPoint(x: max(0, (filled.width - bounds.width) / 2),
-                                               y: max(0, (filled.height - bounds.height) / 2))
-            lastContainerSize = bounds.size
+            rebuildImageGeometry(preserveZoom: lastContainerSize != .zero)
         }
         centerImageIfNeeded()
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
-    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImageIfNeeded();scrollView.accessibilityValue=String(format:"scale %.2f",Double(scrollView.zoomScale)) }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        centerImageIfNeeded()
+        sizeSlider.value = Float(scrollView.zoomScale)
+        updateZoomAccessibility()
+    }
 
     private func centerImageIfNeeded() {
         let horizontal = max(0, (bounds.width - imageView.frame.width) / 2)
@@ -170,38 +218,158 @@ private final class NativePhotoZoomView: UIView, UIScrollViewDelegate {
     }
 
     @objc private func doubleTapped(_ recognizer: UITapGestureRecognizer) {
-        if scrollView.zoomScale > 1.05 {
+        if scrollView.zoomScale > 1.15 {
             scrollView.setZoomScale(1, animated: true)
         } else {
             let location = recognizer.location(in: imageView)
-            let size = CGSize(width: bounds.width / 3, height: bounds.height / 3)
+            let targetZoom: CGFloat = 2.5
+            let size = CGSize(width: scrollView.bounds.width / targetZoom, height: scrollView.bounds.height / targetZoom)
             scrollView.zoom(to: CGRect(x: location.x - size.width / 2, y: location.y - size.height / 2, width: size.width, height: size.height), animated: true)
         }
     }
 
-    private static func loadPhoto(from folder: URL?) -> UIImage? {
-        guard let folder else { return nil }
-        let candidates = ["lake-photo-v1.png", "lake-photo-v1.jpg", "lake-photo-v1.jpeg"]
-        for name in candidates {
-            let url = folder.appendingPathComponent(name)
-            if let image = UIImage(contentsOfFile: url.path) { return image }
+    @objc private func sizeSliderChanged() {
+        scrollView.setZoomScale(CGFloat(sizeSlider.value), animated: false)
+    }
+
+    @objc private func resetPhoto() {
+        scrollView.setZoomScale(1, animated: false)
+        centerImageIfNeeded()
+        centerCurrentImage()
+        updateZoomAccessibility()
+    }
+
+    func resetScene() { resetPhoto() }
+
+    private func selectBuiltIn(at index: Int) {
+        guard builtInImages.indices.contains(index) else { return }
+        selectedBuiltInIndex = index
+        setPhoto(builtInImages[index].image)
+        rebuildImageMenu()
+    }
+
+    private func setPhoto(_ image: UIImage) {
+        imageView.image = image
+        rebuildImageGeometry(preserveZoom: false)
+    }
+
+    private func rebuildImageGeometry(preserveZoom: Bool) {
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let oldZoom = preserveZoom ? scrollView.zoomScale : 1
+        scrollView.setZoomScale(1, animated: false)
+        imageView.transform = .identity
+        let source = imageView.image?.size ?? CGSize(width: 4, height: 3)
+        let maximum = CGSize(width: bounds.width * 0.80, height: bounds.height * 0.60)
+        let scale = min(maximum.width / max(source.width, 1), maximum.height / max(source.height, 1))
+        let fitted = CGSize(width: max(44, source.width * scale), height: max(44, source.height * scale))
+        imageView.frame = CGRect(origin: .zero, size: fitted)
+        scrollView.contentSize = fitted
+        scrollView.setZoomScale(min(max(oldZoom, scrollView.minimumZoomScale), scrollView.maximumZoomScale), animated: false)
+        lastContainerSize = bounds.size
+        centerImageIfNeeded()
+        centerCurrentImage()
+        updateZoomAccessibility()
+    }
+
+    private func centerCurrentImage() {
+        let inset = scrollView.contentInset
+        let scaledSize = imageView.frame.size
+        let minimumX = -inset.left, minimumY = -inset.top
+        let maximumX = max(minimumX, scaledSize.width - scrollView.bounds.width + inset.right)
+        let maximumY = max(minimumY, scaledSize.height - scrollView.bounds.height + inset.bottom)
+        scrollView.contentOffset = CGPoint(x: (minimumX + maximumX) / 2, y: (minimumY + maximumY) / 2)
+    }
+
+    private func updateZoomAccessibility() {
+        let value = String(format: "scale %.2f", Double(scrollView.zoomScale))
+        imageView.accessibilityLabel = selectedBuiltInIndex.flatMap {builtInImages.indices.contains($0) ? builtInImages[$0].name : nil} ?? "系统选择的测试图片"
+        scrollView.accessibilityValue = value
+        imageView.accessibilityValue = value
+        sizeSlider.accessibilityValue = value
+        zoomLabel.text = "\(Int(round(scrollView.zoomScale * 100)))%"
+    }
+
+    private func rebuildImageMenu() {
+        var actions: [UIMenuElement] = builtInImages.enumerated().map { index, item in
+            UIAction(title: item.name, image: UIImage(systemName: "photo"), state: selectedBuiltInIndex == index ? .on : .off) { [weak self] _ in
+                self?.selectBuiltIn(at: index)
+            }
+        }
+        actions.append(UIAction(title: "从系统相册选择…", image: UIImage(systemName: "photo.on.rectangle.angled")) { [weak self] _ in
+            self?.presentPhotoPicker()
+        })
+        changeButton.menu = UIMenu(title: "选择测试图片", children: actions)
+    }
+
+    private func presentPhotoPicker() {
+        guard sceneIsActive, presentedPicker == nil, let controller = nearestViewController() else { return }
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = 1
+        configuration.preferredAssetRepresentationMode = .current
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = self
+        presentedPicker = picker
+        controller.present(picker, animated: true)
+    }
+
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        presentedPicker = nil
+        guard sceneIsActive, let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { return }
+        provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
+            guard let image = object as? UIImage else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.sceneIsActive else { return }
+                self.selectedBuiltInIndex = nil
+                self.setPhoto(image)
+                self.rebuildImageMenu()
+            }
+        }
+    }
+
+    private func nearestViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
         }
         return nil
     }
 
-    private static func placeholderPhoto() -> UIImage {
+    func stopScene() {
+        sceneIsActive = false
+        presentedPicker?.delegate = nil
+        presentedPicker?.dismiss(animated: false)
+        presentedPicker = nil
+    }
+
+    private static func loadBuiltInImages(from folder: URL?) -> [(name: String, image: UIImage)] {
+        let definitions = [
+            ("湖景照片", "lake-photo-v1.png", UIColor(red: 0.10, green: 0.48, blue: 0.62, alpha: 1)),
+            ("战场细节", "moba-battlefield-v1.png", UIColor(red: 0.30, green: 0.52, blue: 0.25, alpha: 1)),
+            ("靶场细节", "shooter-training-v1.png", UIColor(red: 0.50, green: 0.32, blue: 0.20, alpha: 1))
+        ]
+        return definitions.map { name, file, color in
+            let image = folder.flatMap { UIImage(contentsOfFile: $0.appendingPathComponent(file).path) }
+                ?? placeholderPhoto(title: name, accent: color)
+            return (name, image)
+        }
+    }
+
+    private static func placeholderPhoto(title: String, accent: UIColor) -> UIImage {
         let size = CGSize(width: 1400, height: 1000)
         return UIGraphicsImageRenderer(size: size).image { renderer in
             let cg = renderer.cgContext
             let colors = [UIColor(red: 0.05, green: 0.16, blue: 0.29, alpha: 1).cgColor,
-                          UIColor(red: 0.14, green: 0.57, blue: 0.67, alpha: 1).cgColor] as CFArray
+                          accent.cgColor] as CFArray
             let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
             cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
-            UIColor(red: 0.05, green: 0.35, blue: 0.28, alpha: 1).setFill()
+            accent.withAlphaComponent(0.75).setFill()
             UIBezierPath(roundedRect: CGRect(x: 0, y: 590, width: 1400, height: 410), cornerRadius: 0).fill()
             UIColor.white.withAlphaComponent(0.72).setFill()
             UIBezierPath(ovalIn: CGRect(x: 1030, y: 100, width: 170, height: 170)).fill()
-            let text = "离线缩放测试照片"
+            let text = title
             text.draw(at: CGPoint(x: 54, y: 50), withAttributes: [.font: UIFont.systemFont(ofSize: 45, weight: .bold), .foregroundColor: UIColor.white])
         }
     }
@@ -299,39 +467,65 @@ private final class NativeMapCanvasView: UIView {
 
 // MARK: - Native paged reading
 
-private final class NativeReadingView: UIView, UIScrollViewDelegate {
-    private let heading = EverydayTheme.title("原生多页阅读", detail: "左右翻页；慢速拖动与快速甩动都应稳定跟手")
-    private let scrollView = UIScrollView()
+private final class NativeReadingView: UIView, UITextViewDelegate {
+    private let heading = EverydayTheme.title("原生阅读", detail: "默认上下连续滚动，也可切换为横向逐页翻阅")
+    private let modeControl = UISegmentedControl(items: ["上下连续", "横向翻页"])
+    private let verticalTextView = UITextView()
+    private let pagedScrollView = UIScrollView()
     private let pageControl = UIPageControl()
     private let fontControl = UISegmentedControl(items: ["A−", "18 pt", "A+"])
     private var bodyFontSize: CGFloat = 18
     private var pageViews: [UIView] = []
     private let pages: [(String, String)] = [
-        ("第一章 · 触摸的节奏", "把手指放在屏幕上，缓慢向左滑动。内容应该紧贴手指移动，不应突然跳页。随后快速轻扫，观察减速动画和翻页落点。\n\n阅读场景能同时检查短距离滑动、长距离拖动、停顿后续滑以及边缘起手。请分别使用拇指和食指，并尝试靠近屏幕四边操作。"),
-        ("第二章 · 双手操作", "用一只手握住设备，另一只手连续翻页。再换手重复，比较屏幕左右边缘的响应。\n\n如果贴边起手经常失败，请取下保护壳或保护膜复测。系统返回手势可能会优先识别最外侧的滑动，这属于操作系统行为。"),
-        ("第三章 · 连续性", "在这一页进行多次短促的左右往返拖动。文字页面不应丢失，也不应在手指仍按住时自动跳到其他页面。\n\n放开手指后，页面会按照速度停靠到最近的一页。这是原生 UIScrollView 的分页行为。"),
-        ("第四章 · 测试结论", "完成慢拖、快甩、边缘起手和双手操作后，可返回项目菜单继续视频、控件、菜单和键盘测试。\n\n本页完全由 UIKit 绘制，不依赖网页、网络或浏览器运行时。")
+        ("第一章 · 雨停时", "傍晚六点，雨声忽然从屋檐上退了下去。林澈推开窗，潮湿的风带着栀子叶的气味，穿过安静的房间。街面像一块刚擦亮的玻璃，红绿灯和行人的伞都在水光里留下细长的倒影。\n\n他拿起外套下楼，没有带伞。巷口卖栗子的老人重新掀开炉盖，白汽在暮色中慢慢散开；两个孩子踩着积水跑过，笑声撞在墙上，又轻轻落回路边。林澈沿着熟悉的石板路往河边走，鞋底每一步都发出清脆的水声。\n\n这座城在雨后显得比平日宽阔。许多被车声和尘土遮住的小事重新出现：窗台上的蓝花盆、修鞋铺门前睡醒的猫、远处钟楼被云隙照亮的一角。林澈忽然想起，多年前的一个雨天，也有人与他并肩走过这里，只是那时他们都急着赶路，没有认真看过这座城。"),
+        ("第二章 · 旧书店", "河岸转角有一家旧书店，木门上的铜铃被风吹得轻响。林澈原以为它早已关门，没想到门内仍亮着一盏暖黄的灯。店主是一位头发花白的女人，正把受潮的书一本本摊开放在桌上。她抬头看见他，只说：“雨停了，进来坐坐吧。”\n\n书架比记忆里更拥挤，过道只容一人侧身经过。林澈在最里面发现一本绿色封皮的旅行笔记，纸页间夹着一张褪色车票，日期恰好是十二年前的今天。车票背面写着一行铅笔字：如果错过末班车，就在城里多留一晚。字迹陌生，却让他站了很久。\n\n店主端来一杯热茶，说那本书曾属于一位常客。那人喜欢在雨天来，把走过的地方画成小小的地图，后来去了北方，再没有回来。林澈翻到最后一页，那里只画着这座城的河流和桥，桥边标了一颗星。星的位置，正是他每天经过却从未停留的旧码头。"),
+        ("第三章 · 桥上的灯", "夜色完全落下时，林澈带着那本笔记来到旧码头。河水涨了些，落叶向东流去。桥栏上的灯一盏接一盏亮起，把湿漉漉的石阶照成柔和的金色。笔记里的星落在桥中央，那里只有一张面向河面的长椅。\n\n长椅上坐着一个抱小提琴盒的女孩。她说自己在等最后一班公交，却因为喜欢雨后的河面，故意错过了两班。林澈把笔记上的地图给她看，女孩认真对照远处的屋顶，发现图里少了一座新建的高楼，也多了一排已经拆掉的仓库。时间像两层透明的纸，在灯影里慢慢叠在一起。\n\n女孩打开琴盒，取出小提琴，试着拉了一段很短的旋律。声音起初有些犹豫，随后顺着河面飘远。桥上的行人放慢脚步，卖花的人停下自行车，连水边觅食的鸟也安静了一会儿。曲子结束后，林澈在笔记空白处补上今晚的桥灯，并写道：有些地方并不等待谁，它只是一直亮着，让偶然停下的人看见彼此。"),
+        ("第四章 · 清晨来信", "第二天清晨，云层散开，阳光从楼群之间落进街道。林澈把旅行笔记送回书店，又买下一叠素白的信纸。他坐在临窗的小桌旁，给多年未见的朋友写信，没有解释迟来的原因，只写昨夜的河、桥上的琴声，以及那张夹在书里的旧车票。\n\n写到最后，他停笔看向窗外。城市正在醒来：面包店拉开卷帘门，清洁车慢慢驶过，学生背着书包在路口等待绿灯。昨夜积水里的倒影已经消失，石板路恢复了寻常的灰色，可他知道，那些被雨洗亮的细节并没有真正离开，只是重新藏进忙碌的日子里。\n\n店主替他找来信封，又从抽屉里取出一枚旧邮票。她说，旅行笔记的主人曾相信，每一封认真写下的信都能改变一条路的方向。林澈笑着把信封好，走到街角的邮筒前。投信的一刻，钟楼敲响了八点。他没有立刻回家，而是沿着河岸继续向前，准备去看看地图上那些尚未画出的地方。")
     ]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = UIColor(red: 0.94, green: 0.92, blue: 0.85, alpha: 1)
-        scrollView.isPagingEnabled = true
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.alwaysBounceHorizontal = true
-        scrollView.delegate = self
-        scrollView.contentInsetAdjustmentBehavior = .never
-        addSubview(scrollView)
+        modeControl.selectedSegmentIndex = 0
+        modeControl.selectedSegmentTintColor = UIColor(white: 0.20, alpha: 1)
+        modeControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+        modeControl.addTarget(self, action: #selector(readingModeChanged), for: .valueChanged)
+        addSubview(modeControl)
+
+        verticalTextView.isEditable = false
+        verticalTextView.isSelectable = true
+        verticalTextView.alwaysBounceVertical = true
+        verticalTextView.showsVerticalScrollIndicator = true
+        verticalTextView.backgroundColor = .clear
+        verticalTextView.textColor = UIColor(red: 0.25, green: 0.21, blue: 0.16, alpha: 1)
+        verticalTextView.textContainerInset = UIEdgeInsets(top: 20, left: 20, bottom: 34, right: 20)
+        verticalTextView.delegate = self
+        verticalTextView.accessibilityIdentifier = "native-reader-scroll"
+        verticalTextView.accessibilityLabel = "上下连续阅读内容"
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing") {verticalTextView.accessibilityValue = "offsetY 0"}
+        addSubview(verticalTextView)
+
+        pagedScrollView.isPagingEnabled = true
+        pagedScrollView.isDirectionalLockEnabled = true
+        pagedScrollView.showsHorizontalScrollIndicator = false
+        pagedScrollView.alwaysBounceHorizontal = true
+        pagedScrollView.delegate = self
+        pagedScrollView.contentInsetAdjustmentBehavior = .never
+        pagedScrollView.isHidden = true
+        addSubview(pagedScrollView)
         for (title, body) in pages {
             let page = UIView(); page.backgroundColor = .clear
             let titleLabel = UILabel(); titleLabel.text = title; titleLabel.textColor = UIColor(red: 0.18, green: 0.14, blue: 0.10, alpha: 1); titleLabel.font = .systemFont(ofSize: 25, weight: .bold); titleLabel.numberOfLines = 2
-            let bodyLabel = UILabel(); bodyLabel.text = body; bodyLabel.textColor = UIColor(red: 0.25, green: 0.21, blue: 0.16, alpha: 1); bodyLabel.font = .systemFont(ofSize: 18, weight: .regular); bodyLabel.numberOfLines = 0
-            page.addSubview(titleLabel); page.addSubview(bodyLabel)
-            titleLabel.tag = 101; bodyLabel.tag = 102
-            scrollView.addSubview(page); pageViews.append(page)
+            let bodyText = UITextView(); bodyText.text = body; bodyText.textColor = UIColor(red: 0.25, green: 0.21, blue: 0.16, alpha: 1); bodyText.font = .systemFont(ofSize: 18, weight: .regular)
+            bodyText.isEditable = false; bodyText.isSelectable = true; bodyText.alwaysBounceVertical = true; bodyText.isDirectionalLockEnabled = true
+            bodyText.backgroundColor = .clear; bodyText.textContainerInset = UIEdgeInsets(top: 4, left: 0, bottom: 24, right: 0)
+            page.addSubview(titleLabel); page.addSubview(bodyText)
+            titleLabel.tag = 101; bodyText.tag = 102
+            pagedScrollView.addSubview(page); pageViews.append(page)
         }
         pageControl.numberOfPages = pages.count
         pageControl.currentPage = 0
+        pageControl.isHidden = true
         pageControl.currentPageIndicatorTintColor = .darkGray
         pageControl.pageIndicatorTintColor = UIColor.darkGray.withAlphaComponent(0.25)
         pageControl.addTarget(self, action: #selector(pageChanged), for: .valueChanged)
@@ -343,6 +537,7 @@ private final class NativeReadingView: UIView, UIScrollViewDelegate {
         addSubview(pageControl)
         addSubview(fontControl)
         addSubview(heading)
+        rebuildContinuousText()
     }
 
     required init?(coder: NSCoder) { nil }
@@ -352,29 +547,43 @@ private final class NativeReadingView: UIView, UIScrollViewDelegate {
         let safe = safeAreaInsets
         heading.frame = CGRect(x: safe.left + 12, y: safe.top + 10,
                                width: max(150, bounds.width - safe.left - safe.right - 96), height: 58)
-        fontControl.frame = CGRect(x: safe.left + 14, y: safe.top + 76, width: 190, height: 34)
-        let top = safe.top + 118, bottom = safe.bottom + 38
-        scrollView.frame = CGRect(x: 0, y: top, width: bounds.width, height: max(100, bounds.height - top - bottom))
+        modeControl.frame = CGRect(x: safe.left + 14, y: safe.top + 76, width: 190, height: 34)
+        fontControl.frame = CGRect(x: safe.left + 14, y: safe.top + 116, width: 190, height: 34)
+        let top = safe.top + 158
+        verticalTextView.frame = CGRect(x: safe.left, y: top, width: bounds.width - safe.left - safe.right,
+                                        height: max(100, bounds.height - top - safe.bottom - 8))
+        let pagedBottom = safe.bottom + 38
+        pagedScrollView.frame = CGRect(x: 0, y: top, width: bounds.width, height: max(100, bounds.height - top - pagedBottom))
         for (index, page) in pageViews.enumerated() {
-            page.frame = CGRect(x: CGFloat(index) * scrollView.bounds.width, y: 0, width: scrollView.bounds.width, height: scrollView.bounds.height)
+            page.frame = CGRect(x: CGFloat(index) * pagedScrollView.bounds.width, y: 0, width: pagedScrollView.bounds.width, height: pagedScrollView.bounds.height)
             let inset = max(26, safe.left + 22)
             let title = page.viewWithTag(101) as? UILabel
             title?.frame = CGRect(x: inset, y: 25, width: page.bounds.width - inset * 2, height: 72)
-            let body = page.viewWithTag(102) as? UILabel
-            body?.frame = CGRect(x: inset, y: 108, width: page.bounds.width - inset * 2, height: page.bounds.height - 130)
+            let body = page.viewWithTag(102) as? UITextView
+            body?.frame = CGRect(x: inset, y: 108, width: page.bounds.width - inset * 2, height: max(44, page.bounds.height - 130))
         }
-        scrollView.contentSize = CGSize(width: scrollView.bounds.width * CGFloat(pageViews.count), height: scrollView.bounds.height)
-        if !scrollView.isDragging && !scrollView.isDecelerating { scrollView.contentOffset.x = CGFloat(pageControl.currentPage) * scrollView.bounds.width }
+        pagedScrollView.contentSize = CGSize(width: pagedScrollView.bounds.width * CGFloat(pageViews.count), height: pagedScrollView.bounds.height)
+        if !pagedScrollView.isDragging && !pagedScrollView.isDecelerating { pagedScrollView.contentOffset.x = CGFloat(pageControl.currentPage) * pagedScrollView.bounds.width }
         pageControl.frame = CGRect(x: safe.left, y: bounds.height - safe.bottom - 36, width: bounds.width - safe.left - safe.right, height: 28)
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard scrollView.bounds.width > 0 else { return }
-        pageControl.currentPage = max(0, min(pages.count - 1, Int(round(scrollView.contentOffset.x / scrollView.bounds.width))))
+        if scrollView === verticalTextView {
+            if ProcessInfo.processInfo.arguments.contains("--ui-testing") {verticalTextView.accessibilityValue = String(format: "offsetY %.1f", Double(max(0, scrollView.contentOffset.y)))}
+        } else if scrollView === pagedScrollView, scrollView.bounds.width > 0 {
+            pageControl.currentPage = max(0, min(pages.count - 1, Int(round(scrollView.contentOffset.x / scrollView.bounds.width))))
+        }
     }
 
     @objc private func pageChanged() {
-        scrollView.setContentOffset(CGPoint(x: CGFloat(pageControl.currentPage) * scrollView.bounds.width, y: 0), animated: true)
+        pagedScrollView.setContentOffset(CGPoint(x: CGFloat(pageControl.currentPage) * pagedScrollView.bounds.width, y: 0), animated: true)
+    }
+
+    @objc private func readingModeChanged() {
+        let continuous = modeControl.selectedSegmentIndex == 0
+        verticalTextView.isHidden = !continuous
+        pagedScrollView.isHidden = continuous
+        pageControl.isHidden = continuous
     }
 
     @objc private func fontControlChanged() {
@@ -383,56 +592,169 @@ private final class NativeReadingView: UIView, UIScrollViewDelegate {
         fontControl.setTitle("\(Int(bodyFontSize)) pt", forSegmentAt: 1)
         fontControl.selectedSegmentIndex = 1
         for page in pageViews {
-            (page.viewWithTag(102) as? UILabel)?.font = .systemFont(ofSize: bodyFontSize, weight: .regular)
+            (page.viewWithTag(102) as? UITextView)?.font = .systemFont(ofSize: bodyFontSize, weight: .regular)
         }
+        rebuildContinuousText()
+    }
+
+    private func rebuildContinuousText() {
+        let output = NSMutableAttributedString()
+        for (index, page) in pages.enumerated() {
+            if index > 0 { output.append(NSAttributedString(string: "\n\n")) }
+            output.append(NSAttributedString(string: page.0 + "\n", attributes: [
+                .font: UIFont.systemFont(ofSize: bodyFontSize + 7, weight: .bold),
+                .foregroundColor: UIColor(red: 0.18, green: 0.14, blue: 0.10, alpha: 1)
+            ]))
+            let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 5; paragraph.paragraphSpacing = 9
+            output.append(NSAttributedString(string: page.1, attributes: [
+                .font: UIFont.systemFont(ofSize: bodyFontSize, weight: .regular),
+                .foregroundColor: UIColor(red: 0.25, green: 0.21, blue: 0.16, alpha: 1),
+                .paragraphStyle: paragraph
+            ]))
+        }
+        verticalTextView.attributedText = output
     }
 }
 
 // MARK: - Local video player
 
-private final class NativeVideoView: UIView, NativeSceneLifecycle {
+private final class NativeVideoView: UIView, NativeSceneLifecycle, UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate, UIGestureRecognizerDelegate {
+    private struct FeedEntry {
+        let title: String
+        let caption: String
+        let startFraction: Double
+        let endFraction: Double
+        let baseLikes: Int
+    }
+
+    /// These are explicitly four practice ranges cut from the same bundled
+    /// clip. The UI never presents them as four independent videos.
+    private let entries: [FeedEntry] = [
+        FeedEntry(title: "慢速跟手", caption: "缓慢上下滑动，观察画面切换和触点连续性。", startFraction: 0.00, endFraction: 0.25, baseLikes: 18),
+        FeedEntry(title: "快速连刷", caption: "连续短距离上刷，检查是否漏触或误触按钮。", startFraction: 0.25, endFraction: 0.50, baseLikes: 26),
+        FeedEntry(title: "暂停与拖动", caption: "暂停后拖动进度，再恢复播放检查控制精度。", startFraction: 0.50, endFraction: 0.75, baseLikes: 14),
+        FeedEntry(title: "边缘操作", caption: "从左右边缘开始操作，并测试评论输入。", startFraction: 0.75, endFraction: 1.00, baseLikes: 31)
+    ]
+
     private let playerLayer = AVPlayerLayer()
-    private let heading = EverydayTheme.title("本地视频手势", detail: "点按播放/暂停；上滑下一段，下滑上一段")
-    private let playButton = EverydayTheme.button("播放", image: "play.fill")
-    private let statusLabel = UILabel()
+    private let feedFilter = UISegmentedControl(items: ["关注", "推荐"])
+    private let rangeLabel = UILabel()
+    private let titleLabel = UILabel()
+    private let captionLabel = UILabel()
+    private let progressSlider = UISlider()
+    private let playButton = EverydayTheme.button("暂停", image: "pause.fill")
+    private let rightActions = UIStackView()
+    private let avatarButton = UIButton(type: .system)
+    private let likeButton = UIButton(type: .system)
+    private let commentButton = UIButton(type: .system)
+    private let shareButton = UIButton(type: .system)
+    private let bottomBar = UIView()
+    private var bottomButtons: [UIButton] = []
+
+    private let commentsPanel = UIView()
+    private let commentsTitle = UILabel()
+    private let commentsTable = UITableView(frame: .zero, style: .plain)
+    private let commentField = UITextField()
+    private let sendButton = UIButton(type: .system)
+    private let closeCommentsButton = UIButton(type: .system)
+
+    private let sectionOverlay = UIView()
+    private let sectionTitle = UILabel()
+    private let sectionBody = UILabel()
+    private let closeSectionButton = UIButton(type: .system)
+
     private var player: AVPlayer?
-    private var observer: NSObjectProtocol?
-    private var urls: [URL] = []
-    private var currentIndex = 0
+    private var endObserver: NSObjectProtocol?
+    private var periodicObserver: Any?
+    private var keyboardObservers: [NSObjectProtocol] = []
+    private var keyboardOffset: CGFloat = 0
+    private var sourceURL: URL?
+    private var feedOrder = [0, 1, 2, 3]
+    private var feedPosition = 0
+    private var liked = Array(repeating: false, count: 4)
+    private var comments: [[String]] = [
+        ["这里可以测试评论输入和键盘。"], ["连续上刷时按钮不应被误触。"], [], ["试试从屏幕边缘开始滑动。"]
+    ]
+    private var userIsScrubbing = false
     private var wasPlayingBeforePause = false
     private var isLifecyclePaused = false
+
+    private var currentEntryIndex: Int { feedOrder[feedPosition] }
 
     init(assetFolder: URL?) {
         super.init(frame: .zero)
         backgroundColor = .black
         layer.addSublayer(playerLayer)
-        // The test scene itself is full-screen. Fill the entire surface so a
-        // landscape/portrait mismatch is expressed as a deliberate crop, not
-        // as top/bottom letterboxing that could be mistaken for a dead area.
         playerLayer.videoGravity = .resizeAspectFill
-        addSubview(heading)
+
+        feedFilter.selectedSegmentIndex = 1
+        feedFilter.selectedSegmentTintColor = UIColor.white.withAlphaComponent(0.92)
+        feedFilter.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        feedFilter.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
+        feedFilter.backgroundColor = UIColor.black.withAlphaComponent(0.40)
+        feedFilter.addTarget(self, action: #selector(feedFilterChanged), for: .valueChanged)
+        addSubview(feedFilter)
+
+        rangeLabel.textColor = UIColor.white.withAlphaComponent(0.82)
+        rangeLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        rangeLabel.backgroundColor = UIColor.black.withAlphaComponent(0.42)
+        rangeLabel.layer.cornerRadius = 9; rangeLabel.clipsToBounds = true
+        rangeLabel.textAlignment = .center
+        rangeLabel.accessibilityIdentifier = "video-index"
+        addSubview(rangeLabel)
+
+        titleLabel.textColor = .white; titleLabel.font = .systemFont(ofSize: 18, weight: .bold)
+        captionLabel.textColor = .white; captionLabel.font = .systemFont(ofSize: 14, weight: .regular); captionLabel.numberOfLines = 2
+        addSubview(titleLabel); addSubview(captionLabel)
+
+        progressSlider.minimumValue = 0; progressSlider.maximumValue = 1
+        progressSlider.minimumTrackTintColor = .white
+        progressSlider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.35)
+        progressSlider.addTarget(self, action: #selector(scrubStarted), for: .touchDown)
+        progressSlider.addTarget(self, action: #selector(scrubChanged), for: .valueChanged)
+        progressSlider.addTarget(self, action: #selector(scrubEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        progressSlider.accessibilityIdentifier = "video-progress"
+        progressSlider.accessibilityLabel = "当前练习片段进度"
+        addSubview(progressSlider)
+
         playButton.addTarget(self, action: #selector(togglePlay), for: .touchUpInside)
         addSubview(playButton)
-        statusLabel.textColor = .white
-        statusLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        statusLabel.textAlignment = .center
-        statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        statusLabel.layer.cornerRadius = 10
-        statusLabel.clipsToBounds = true
-        addSubview(statusLabel)
 
-        let up = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:))); up.direction = .up
-        let down = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:))); down.direction = .down
+        configureActionButton(avatarButton, image: "person.crop.circle.fill", title: "本地")
+        configureActionButton(likeButton, image: "heart", title: "赞")
+        configureActionButton(commentButton, image: "bubble.right", title: "评论")
+        configureActionButton(shareButton, image: "square.and.arrow.up", title: "分享")
+        likeButton.accessibilityIdentifier = "video-like"
+        commentButton.accessibilityIdentifier = "video-comment"
+        avatarButton.addTarget(self, action: #selector(showLocalProfile), for: .touchUpInside)
+        likeButton.addTarget(self, action: #selector(toggleLike), for: .touchUpInside)
+        commentButton.addTarget(self, action: #selector(showComments), for: .touchUpInside)
+        shareButton.addTarget(self, action: #selector(shareEntry), for: .touchUpInside)
+        rightActions.axis = .vertical; rightActions.spacing = 8; rightActions.distribution = .fillEqually
+        [avatarButton, likeButton, commentButton, shareButton].forEach { rightActions.addArrangedSubview($0) }
+        addSubview(rightActions)
+
+        configureBottomBar()
+        configureCommentsPanel()
+        configureSectionOverlay()
+        let center = NotificationCenter.default
+        keyboardObservers = [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardWillHideNotification].map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in self?.keyboardFrameChanged(note) }
+        }
+
+        let up = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:))); up.direction = .up; up.delegate = self
+        let down = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:))); down.direction = .down; down.delegate = self
         addGestureRecognizer(up); addGestureRecognizer(down)
 
-        if let folder=assetFolder, let contents = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
-            urls = contents.filter { ["mp4", "mov", "m4v"].contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        if let folder = assetFolder, let contents = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+            sourceURL = contents.filter { ["mp4", "mov", "m4v"].contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }.first
         }
-        if urls.isEmpty, let folder=assetFolder {
+        if sourceURL == nil, let folder = assetFolder {
             let fallback = folder.appendingPathComponent("flower-cc0.mp4")
-            if FileManager.default.fileExists(atPath: fallback.path) { urls = [fallback] }
+            if FileManager.default.fileExists(atPath: fallback.path) { sourceURL = fallback }
         }
-        load(index: 0, autoplay: true)
+        preparePlayer()
+        updateFeedUI()
     }
 
     required init?(coder: NSCoder) { nil }
@@ -442,39 +764,193 @@ private final class NativeVideoView: UIView, NativeSceneLifecycle {
         super.layoutSubviews()
         playerLayer.frame = bounds
         let safe = safeAreaInsets
-        heading.frame = CGRect(x: safe.left + 12, y: safe.top + 10,
-                               width: max(150, bounds.width - safe.left - safe.right - 96), height: 58)
-        playButton.frame = CGRect(x: (bounds.width - 126) / 2, y: bounds.height - safe.bottom - 70, width: 126, height: 46)
-        statusLabel.frame = CGRect(x: safe.left + 14, y: playButton.frame.minY - 36,
-                                   width: bounds.width - safe.left - safe.right - 28, height: 26)
+        let topAvailableRight = safe.right + 72
+        feedFilter.frame = CGRect(x: max(safe.left + 12, (bounds.width - topAvailableRight - 174) / 2), y: safe.top + 10, width: 174, height: 34)
+        rangeLabel.frame = CGRect(x: safe.left + 12, y: safe.top + 52, width: min(250, bounds.width - safe.left - topAvailableRight - 18), height: 24)
+
+        let tabHeight: CGFloat = 56
+        bottomBar.frame = CGRect(x: 0, y: bounds.height - safe.bottom - tabHeight, width: bounds.width, height: tabHeight)
+        let buttonWidth = bottomBar.bounds.width / CGFloat(max(bottomButtons.count, 1))
+        for (index, button) in bottomButtons.enumerated() { button.frame = CGRect(x: CGFloat(index) * buttonWidth, y: 0, width: buttonWidth, height: tabHeight) }
+
+        rightActions.frame = CGRect(x: bounds.width - safe.right - 70,
+                                    y: max(safe.top + 94, bounds.height - safe.bottom - 390), width: 58, height: 250)
+        let copyRight = safe.right + 84
+        let copyBottom = bottomBar.frame.minY - 8
+        progressSlider.frame = CGRect(x: safe.left + 14, y: copyBottom - 36,
+                                      width: max(120, bounds.width - safe.left - copyRight - 14), height: 28)
+        playButton.frame = CGRect(x: safe.left + 14, y: progressSlider.frame.minY - 48, width: 104, height: 40)
+        captionLabel.frame = CGRect(x: safe.left + 14, y: playButton.frame.minY - 52,
+                                    width: max(130, bounds.width - safe.left - copyRight - 16), height: 48)
+        titleLabel.frame = CGRect(x: safe.left + 14, y: captionLabel.frame.minY - 30,
+                                  width: max(130, bounds.width - safe.left - copyRight - 16), height: 26)
+
+        layoutCommentsPanel()
+        sectionOverlay.frame = CGRect(x: safe.left + 10, y: safe.top + 82,
+                                      width: bounds.width - safe.left - safe.right - 20,
+                                      height: max(220, bottomBar.frame.minY - safe.top - 94))
+        closeSectionButton.frame = CGRect(x: sectionOverlay.bounds.width - 48, y: 10, width: 38, height: 38)
+        sectionTitle.frame = CGRect(x: 20, y: 16, width: sectionOverlay.bounds.width - 78, height: 34)
+        sectionBody.frame = CGRect(x: 20, y: 58, width: sectionOverlay.bounds.width - 40, height: sectionOverlay.bounds.height - 76)
     }
 
-    private func load(index: Int, autoplay: Bool) {
-        if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
-        player?.pause()
-        guard !urls.isEmpty else {
-            player = nil; playerLayer.player = nil
-            statusLabel.text = "未找到本地 MP4 资源"
-            playButton.isEnabled = false
+    private func configureActionButton(_ button: UIButton, image: String, title: String) {
+        var configuration = UIButton.Configuration.plain()
+        configuration.image = UIImage(systemName: image)
+        configuration.title = title
+        configuration.imagePlacement = .top
+        configuration.imagePadding = 3
+        configuration.baseForegroundColor = .white
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var result = incoming; result.font = .systemFont(ofSize: 11, weight: .semibold); return result
+        }
+        button.configuration = configuration
+        button.backgroundColor = UIColor.black.withAlphaComponent(0.40)
+        button.layer.cornerRadius = 22
+    }
+
+    private func configureBottomBar() {
+        bottomBar.backgroundColor = UIColor.black.withAlphaComponent(0.78)
+        addSubview(bottomBar)
+        let tabs = [("首页", "house.fill"), ("发现", "magnifyingglass"), ("创建", "plus.app.fill"), ("消息", "message.fill"), ("我的", "person.fill")]
+        for (index, item) in tabs.enumerated() {
+            let button = UIButton(type: .system)
+            var configuration = UIButton.Configuration.plain()
+            configuration.title = item.0; configuration.image = UIImage(systemName: item.1)
+            configuration.imagePlacement = .top; configuration.imagePadding = 2
+            configuration.baseForegroundColor = index == 0 ? .white : UIColor.white.withAlphaComponent(0.55)
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                var result = incoming; result.font = .systemFont(ofSize: 10, weight: .semibold); return result
+            }
+            button.configuration = configuration; button.tag = index
+            button.addTarget(self, action: #selector(bottomTabSelected(_:)), for: .touchUpInside)
+            bottomBar.addSubview(button); bottomButtons.append(button)
+        }
+    }
+
+    private func configureCommentsPanel() {
+        commentsPanel.backgroundColor = UIColor(white: 0.08, alpha: 0.98)
+        commentsPanel.layer.cornerRadius = 20; commentsPanel.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        commentsPanel.isHidden = true
+        addSubview(commentsPanel)
+        commentsTitle.text = "本地评论"; commentsTitle.textColor = .white; commentsTitle.font = .systemFont(ofSize: 18, weight: .bold)
+        closeCommentsButton.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal); closeCommentsButton.tintColor = .white
+        closeCommentsButton.addTarget(self, action: #selector(hideComments), for: .touchUpInside)
+        commentsTable.backgroundColor = .clear; commentsTable.separatorColor = UIColor.white.withAlphaComponent(0.15)
+        commentsTable.dataSource = self; commentsTable.delegate = self
+        commentsTable.register(UITableViewCell.self, forCellReuseIdentifier: "comment")
+        commentField.placeholder = "写一条本地评论…"; commentField.textColor = .white; commentField.tintColor = .white
+        commentField.attributedPlaceholder = NSAttributedString(string: "写一条本地评论…", attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.45)])
+        commentField.backgroundColor = UIColor.white.withAlphaComponent(0.10); commentField.layer.cornerRadius = 17
+        commentField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1)); commentField.leftViewMode = .always
+        commentField.returnKeyType = .send; commentField.delegate = self
+        commentField.accessibilityIdentifier = "video-comment-input"
+        sendButton.setTitle("发送", for: .normal); sendButton.setTitleColor(.white, for: .normal); sendButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
+        sendButton.accessibilityIdentifier = "video-comment-send"
+        sendButton.addTarget(self, action: #selector(sendComment), for: .touchUpInside)
+        closeCommentsButton.accessibilityIdentifier = "video-close-comments"
+        [commentsTitle, closeCommentsButton, commentsTable, commentField, sendButton].forEach { commentsPanel.addSubview($0) }
+    }
+
+    private func layoutCommentsPanel() {
+        let safe = safeAreaInsets
+        let panelHeight = min(360, max(250, bounds.height - safe.top - 100))
+        commentsPanel.frame = CGRect(x: 0, y: bounds.height - safe.bottom - panelHeight - keyboardOffset, width: bounds.width, height: panelHeight)
+        commentsTitle.frame = CGRect(x: 18, y: 14, width: commentsPanel.bounds.width - 80, height: 32)
+        closeCommentsButton.frame = CGRect(x: commentsPanel.bounds.width - 52, y: 10, width: 42, height: 42)
+        commentField.frame = CGRect(x: 14, y: commentsPanel.bounds.height - 52, width: commentsPanel.bounds.width - 92, height: 38)
+        sendButton.frame = CGRect(x: commentsPanel.bounds.width - 72, y: commentsPanel.bounds.height - 52, width: 62, height: 38)
+        commentsTable.frame = CGRect(x: 0, y: 54, width: commentsPanel.bounds.width, height: commentsPanel.bounds.height - 112)
+    }
+
+    private func configureSectionOverlay() {
+        sectionOverlay.backgroundColor = UIColor(white: 0.06, alpha: 0.97)
+        sectionOverlay.layer.cornerRadius = 22; sectionOverlay.layer.borderWidth = 1; sectionOverlay.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        sectionOverlay.isHidden = true
+        sectionTitle.textColor = .white; sectionTitle.font = .systemFont(ofSize: 23, weight: .bold)
+        sectionBody.textColor = UIColor.white.withAlphaComponent(0.78); sectionBody.font = .systemFont(ofSize: 16); sectionBody.numberOfLines = 0; sectionBody.textAlignment = .center
+        closeSectionButton.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal); closeSectionButton.tintColor = .white
+        closeSectionButton.addTarget(self, action: #selector(closeSection), for: .touchUpInside)
+        [sectionTitle, sectionBody, closeSectionButton].forEach { sectionOverlay.addSubview($0) }
+        addSubview(sectionOverlay)
+    }
+
+    private func keyboardFrameChanged(_ notification: Notification) {
+        let endFrame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
+        let localFrame = convert(endFrame, from: nil)
+        keyboardOffset = notification.name == UIResponder.keyboardWillHideNotification ? 0 : max(0, bounds.maxY - localFrame.minY - safeAreaInsets.bottom)
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        UIView.animate(withDuration: duration) { self.layoutCommentsPanel() }
+    }
+
+    private func preparePlayer() {
+        guard let sourceURL else {
+            rangeLabel.text = "未找到本地视频资源"
+            playButton.isEnabled = false; progressSlider.isEnabled = false
             return
         }
-        currentIndex = (index % urls.count + urls.count) % urls.count
-        let item = AVPlayerItem(url: urls[currentIndex])
+        let item = AVPlayerItem(url: sourceURL)
         let newPlayer = AVPlayer(playerItem: item)
-        player = newPlayer
-        playerLayer.player = newPlayer
-        observer = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            if self.urls.count > 1 { self.load(index: self.currentIndex + 1, autoplay: true) }
-            else { self.player?.seek(to: .zero); self.player?.play() }
+        player = newPlayer; playerLayer.player = newPlayer
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            self?.seekToCurrentEntry(autoplay: true)
         }
-        updateStatus()
-        if autoplay { newPlayer.play(); setPlayingUI(true) } else { setPlayingUI(false) }
+        periodicObserver = newPlayer.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] time in
+            self?.playerTimeChanged(time)
+        }
+        seekToCurrentEntry(autoplay: true)
     }
 
-    private func updateStatus() {
-        guard !urls.isEmpty else { return }
-        statusLabel.text = "\(currentIndex + 1)/\(urls.count)  \(urls[currentIndex].lastPathComponent)  ·  上下滑动切换"
+    private func segmentBounds() -> (start: Double, end: Double)? {
+        guard let duration = player?.currentItem?.duration.seconds, duration.isFinite, duration > 0.2 else { return nil }
+        let entry = entries[currentEntryIndex]
+        let start = min(duration - 0.1, max(0, duration * entry.startFraction))
+        let end = min(duration, max(start + min(0.8, duration), duration * entry.endFraction))
+        return (start, end)
+    }
+
+    private func seekToCurrentEntry(autoplay: Bool) {
+        guard let player else { return }
+        let start = segmentBounds()?.start ?? 0
+        player.seek(to: CMTime(seconds: start, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            guard let self, autoplay, !self.isLifecyclePaused else { return }
+            self.player?.play(); self.setPlayingUI(true)
+        }
+    }
+
+    private func playerTimeChanged(_ time: CMTime) {
+        guard let limits = segmentBounds(), !userIsScrubbing else { return }
+        let seconds = time.seconds
+        if seconds < limits.start - 0.15 {
+            seekToCurrentEntry(autoplay: player?.timeControlStatus == .playing)
+            return
+        }
+        if seconds >= limits.end - 0.03 {
+            seekToCurrentEntry(autoplay: player?.timeControlStatus == .playing)
+            return
+        }
+        progressSlider.value = Float(max(0, min(1, (seconds - limits.start) / max(0.01, limits.end - limits.start))))
+        progressSlider.accessibilityValue = "\(Int(round(progressSlider.value * 100)))%"
+    }
+
+    private func updateFeedUI() {
+        let entry = entries[currentEntryIndex]
+        let list = feedFilter.selectedSegmentIndex == 0 ? "关注列表" : "推荐列表"
+        rangeLabel.text = "\(list) · 同一离线素材分段 \(currentEntryIndex + 1)/4"
+        rangeLabel.accessibilityValue = "index \(currentEntryIndex + 1) of 4"
+        titleLabel.text = entry.title; captionLabel.text = entry.caption
+        let count = entry.baseLikes + (liked[currentEntryIndex] ? 1 : 0)
+        setActionButton(likeButton, image: liked[currentEntryIndex] ? "heart.fill" : "heart", title: "\(count)", highlighted: liked[currentEntryIndex])
+        likeButton.accessibilityValue = "\(liked[currentEntryIndex] ? "selected" : "not-selected") count \(count)"
+        setActionButton(commentButton, image: "bubble.right", title: "\(comments[currentEntryIndex].count)", highlighted: false)
+        commentsTable.reloadData()
+    }
+
+    private func setActionButton(_ button: UIButton, image: String, title: String, highlighted: Bool) {
+        var configuration = button.configuration
+        configuration?.image = UIImage(systemName: image); configuration?.title = title
+        configuration?.baseForegroundColor = highlighted ? .systemPink : .white
+        button.configuration = configuration
     }
 
     private func setPlayingUI(_ playing: Bool) {
@@ -484,6 +960,11 @@ private final class NativeVideoView: UIView, NativeSceneLifecycle {
         playButton.configuration = configuration
     }
 
+    @objc private func feedFilterChanged() {
+        feedOrder = feedFilter.selectedSegmentIndex == 0 ? [0, 2] : [0, 1, 2, 3]
+        feedPosition = 0; progressSlider.value = 0; updateFeedUI(); seekToCurrentEntry(autoplay: true)
+    }
+
     @objc private func togglePlay() {
         guard let player else { return }
         if player.timeControlStatus == .playing { player.pause(); setPlayingUI(false) }
@@ -491,35 +972,133 @@ private final class NativeVideoView: UIView, NativeSceneLifecycle {
     }
 
     @objc private func swiped(_ gesture: UISwipeGestureRecognizer) {
-        guard !urls.isEmpty else { return }
+        guard !feedOrder.isEmpty else { return }
         let delta = gesture.direction == .up ? 1 : -1
-        load(index: currentIndex + delta, autoplay: true)
+        feedPosition = (feedPosition + delta + feedOrder.count) % feedOrder.count
+        progressSlider.value = 0; updateFeedUI(); seekToCurrentEntry(autoplay: true)
+    }
+
+    @objc private func toggleLike() {
+        liked[currentEntryIndex].toggle(); updateFeedUI()
+    }
+
+    @objc private func showComments() {
+        sectionOverlay.isHidden = true; commentsPanel.isHidden = false
+        bringSubviewToFront(commentsPanel); commentsTable.reloadData()
+    }
+
+    @objc private func hideComments() { commentField.resignFirstResponder(); commentsPanel.isHidden = true }
+    @objc private func sendComment() {
+        let text = commentField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else { return }
+        comments[currentEntryIndex].append(text); commentField.text = ""; updateFeedUI()
+        let row = comments[currentEntryIndex].count - 1
+        commentsTable.scrollToRow(at: IndexPath(row: row, section: 0), at: .bottom, animated: true)
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool { sendComment(); return true }
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { comments[currentEntryIndex].count }
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "comment", for: indexPath)
+        var content = cell.defaultContentConfiguration(); content.text = comments[currentEntryIndex][indexPath.row]
+        content.textProperties.color = .white; content.textProperties.font = .systemFont(ofSize: 14)
+        cell.contentConfiguration = content; cell.backgroundColor = .clear; cell.selectionStyle = .none
+        return cell
+    }
+
+    @objc private func showLocalProfile() {
+        showSection(title: "本地练习账户", body: "这是离线触控练习入口。\n\n当前 feed 使用同一段内置素材划分为四个播放区间，不会上传头像、观看记录、评论或点赞。")
+    }
+
+    @objc private func shareEntry() {
+        let entry = entries[currentEntryIndex]
+        let text = "Touch Test 离线短视频练习：\(entry.title)（同一内置素材的第 \(currentEntryIndex + 1) 个练习区间）"
+        guard let controller = nearestViewController() else { showSection(title: "分享", body: text); return }
+        let activity = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        activity.popoverPresentationController?.sourceView = shareButton
+        activity.popoverPresentationController?.sourceRect = shareButton.bounds
+        controller.present(activity, animated: true)
+    }
+
+    @objc private func bottomTabSelected(_ sender: UIButton) {
+        for button in bottomButtons {
+            var configuration = button.configuration
+            configuration?.baseForegroundColor = button === sender ? .white : UIColor.white.withAlphaComponent(0.55)
+            button.configuration = configuration
+        }
+        switch sender.tag {
+        case 0: closeSection()
+        case 1: showSection(title: "发现", body: "本地练习列表\n\n• 慢速跟手\n• 快速连刷\n• 暂停与拖动\n• 边缘操作\n\n四项均复用同一内置素材的不同播放区间。")
+        case 2: showSection(title: "创建", body: "离线模式不会发布内容。\n\n这里用于测试中央按钮点击、页面切换和长文案触控，不会调用相机或上传文件。")
+        case 3: showSection(title: "消息", body: "本地通知\n\n触控练习已就绪。所有评论与点赞仅保存在当前运行会话。")
+        default: showLocalProfile()
+        }
+    }
+
+    private func showSection(title: String, body: String) {
+        hideComments(); sectionTitle.text = title; sectionBody.text = body; sectionOverlay.isHidden = false
+        bringSubviewToFront(sectionOverlay)
+    }
+
+    @objc private func closeSection() {
+        sectionOverlay.isHidden = true
+        if let home = bottomButtons.first {
+            for button in bottomButtons {
+                var configuration = button.configuration
+                configuration?.baseForegroundColor = button === home ? .white : UIColor.white.withAlphaComponent(0.55)
+                button.configuration = configuration
+            }
+        }
+    }
+
+    @objc private func scrubStarted() { userIsScrubbing = true }
+    @objc private func scrubChanged() {}
+    @objc private func scrubEnded() {
+        userIsScrubbing = false
+        guard let limits = segmentBounds() else { return }
+        let seconds = limits.start + Double(progressSlider.value) * (limits.end - limits.start)
+        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let touched = touch.view else { return true }
+        if touched is UIControl { return false }
+        if touched.isDescendant(of: commentsPanel) || touched.isDescendant(of: sectionOverlay) || touched.isDescendant(of: rightActions) || touched.isDescendant(of: bottomBar) { return false }
+        return true
+    }
+
+    private func nearestViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
     }
 
     func stopScene() {
-        isLifecyclePaused = false
-        wasPlayingBeforePause = false
-        player?.pause()
-        playerLayer.player = nil
-        player = nil
-        if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
+        isLifecyclePaused = false; wasPlayingBeforePause = false
+        commentField.resignFirstResponder(); player?.pause()
+        if let periodicObserver, let player { player.removeTimeObserver(periodicObserver) }
+        periodicObserver = nil
+        playerLayer.player = nil; player = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
+        keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        keyboardObservers.removeAll()
     }
 
     func pauseScene() {
         guard !isLifecyclePaused else { return }
         isLifecyclePaused = true
-        wasPlayingBeforePause = player?.timeControlStatus == .playing
-        player?.pause()
+        wasPlayingBeforePause = player?.timeControlStatus == .playing || player?.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        player?.pause(); commentField.resignFirstResponder()
         if wasPlayingBeforePause { setPlayingUI(false) }
     }
 
     func resumeScene() {
         guard isLifecyclePaused else { return }
         isLifecyclePaused = false
-        if wasPlayingBeforePause {
-            player?.play()
-            setPlayingUI(true)
-        }
+        if wasPlayingBeforePause { player?.play(); setPlayingUI(true) }
         wasPlayingBeforePause = false
     }
 }

@@ -16,16 +16,15 @@ expected = {'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUps
             'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight'}
 for key in ['UISupportedInterfaceOrientations', 'UISupportedInterfaceOrientations~ipad']:
     assert set(info.get(key, [])) == expected, (key, info.get(key))
-web = app / 'Web'
-for name in ['index.html', 'app.js', 'style.css', 'icon.svg', 'manifest.webmanifest']:
-    source = pathlib.Path('docs') / name
-    assert hashlib.sha256((web / name).read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest(), name
+media = app / 'Media'
+assert media.is_dir() and not (app / 'Web').exists()
+assert not list(app.rglob('*.html')), 'Native IPA must not contain an HTML test application'
 for source in pathlib.Path('docs/assets').rglob('*'):
     if source.is_file():
-        assert hashlib.sha256((web / source.relative_to('docs')).read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest(), str(source)
-html = (web / 'index.html').read_text()
-assert len(re.findall(r'data-mode="[a-z]+"', html)) == 21
+        assert hashlib.sha256((media / source.relative_to('docs/assets')).read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest(), str(source)
 assert (app / info['CFBundleExecutable']).is_file()
+assert b'NativeSuiteController' in (app / info['CFBundleExecutable']).read_bytes()
 print(json.dumps({'bundle': str(app), 'version': info['CFBundleShortVersionString'],
                   'build': info['CFBundleVersion'], 'minimumIOS': info['MinimumOSVersion'],
-                  'families': info['UIDeviceFamily'], 'offlineModes': 21}, indent=2))
+                  'families': info['UIDeviceFamily'], 'nativeEntry': True,
+                  'mediaFiles': sum(p.is_file() for p in media.rglob('*'))}, indent=2))

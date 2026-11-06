@@ -1,5 +1,6 @@
 """Boot actual available iPhone/iPad simulators and capture app launch evidence."""
 import json
+import plistlib
 import pathlib
 import struct
 import re
@@ -11,8 +12,9 @@ app = pathlib.Path(sys.argv[1]).resolve()
 output = pathlib.Path('simulator-evidence')
 output.mkdir(exist_ok=True)
 bundle = 'com.example.TouchTestDemo'
-expected_version = re.search(r'Touch Test <small>(v\d+)</small>', pathlib.Path('docs/index.html').read_text()).group(1)
-modes = re.findall(r'data-mode="([a-z]+)"', pathlib.Path('docs/index.html').read_text())
+expected_version = plistlib.loads((app / 'Info.plist').read_bytes())['CFBundleShortVersionString']
+modes = ['multi', 'draw', 'line', 'ghost', 'auto', 'grid', 'edge', 'pinch', 'map', 'read', 'video',
+         'moba', 'aim', 'ui', 'menu', 'type', 'cross', 'tap', 'hold', 'colors', 'bars']
 assert len(modes) == 21
 
 def run(*args, timeout=180):
@@ -80,7 +82,7 @@ for device in selected:
             if last_observed:
                 (output / f'{name}-{sequence}.json').write_text(json.dumps(last_observed, indent=2))
             assert layout is not None, f'No stable evidence for {sequence}: {last_observed}'
-            assert layout['activeMode'] == mode and layout['modeCount'] == 21 and expected_version in layout['title'], layout
+            assert layout['activeMode'] == mode and layout['modeCount'] == 21 and layout['version'] == expected_version, layout
             viewport = layout['viewport']
             assert (viewport['width'] > viewport['height']) == landscape, layout
             assert layout['orientation'] in ([3, 4] if landscape else [1, 2]), layout
@@ -90,6 +92,9 @@ for device in selected:
             menu = layout['menu']
             assert menu['top'] >= inset['top'] and menu['bottom'] <= viewport['height'] - inset['bottom'], layout
             assert menu['left'] >= inset['left'] and menu['right'] <= viewport['width'] - inset['right'], layout
+            clear = layout['clear']
+            assert clear['top'] >= inset['top'] and clear['bottom'] <= viewport['height'] - inset['bottom'], layout
+            assert clear['left'] >= inset['left'] and clear['right'] <= viewport['width'] - inset['right'], layout
             assert abs(layout['app']['width']-viewport['width']) <= 1 and abs(layout['app']['height']-viewport['height']) <= 1, layout
             assert abs(layout['body']['width']-viewport['width']) <= 1, layout
             screenshot = output / f'{name}-{sequence}.png'

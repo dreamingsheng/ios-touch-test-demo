@@ -14,7 +14,7 @@ on:
       - 'Native*.swift'
       - 'project.pbxproj'
       - 'TouchTestApp.xcscheme'
-      - 'docs/**'
+      - 'docs/assets/**'
       - 'scripts/**'
       - 'uitests/**'
       - '.github/workflows/build-ios.yml'
@@ -35,7 +35,7 @@ jobs:
         run: |
           mkdir -p TouchTestApp TouchTestApp.xcodeproj/xcshareddata/xcschemes
           mv TouchTestApp.swift TouchTestView.swift Native*.swift TouchTestApp/
-          cp -R docs TouchTestApp/Web
+          cp -R docs/assets TouchTestApp/Media
           mv project.pbxproj TouchTestApp.xcodeproj/
           mv TouchTestApp.xcscheme TouchTestApp.xcodeproj/xcshareddata/xcschemes/
       - name: Build universal device app
@@ -94,6 +94,18 @@ jobs:
           name: simulator-evidence-${{ matrix.device }}
           path: simulator-evidence/
           if-no-files-found: warn
+          retention-days: 5
+      - name: Create review previews
+        if: always()
+        run: python3 scripts/create-simulator-previews.py
+      - name: Upload simulator review previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-preview-${{ matrix.device }}
+          path: simulator-evidence/previews/
+          if-no-files-found: warn
+          retention-days: 5
 
   native-ui:
     runs-on: macos-latest
@@ -104,7 +116,7 @@ jobs:
         run: |
           mkdir -p TouchTestApp TouchTestApp.xcodeproj/xcshareddata/xcschemes
           mv TouchTestApp.swift TouchTestView.swift Native*.swift TouchTestApp/
-          cp -R docs TouchTestApp/Web
+          cp -R docs/assets TouchTestApp/Media
           mv project.pbxproj TouchTestApp.xcodeproj/
           mv TouchTestApp.xcscheme TouchTestApp.xcodeproj/xcshareddata/xcschemes/
           python3 scripts/add-ui-test-target.py
@@ -132,9 +144,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          newer=$(gh api repos/${{ github.repository }}/compare/${{ github.sha }}...main --jq '[.files[].filename | select(test("^(TouchTest|Native|project|docs/|scripts/|\\.github/workflows/build-ios)"))] | length')
+          newer=$(gh api repos/${{ github.repository }}/compare/${{ github.sha }}...main --jq '[.files[].filename | select(test("^(TouchTest|Native|project|docs/assets/|scripts/|uitests/|\\.github/workflows/build-ios)"))] | length')
           test "$newer" = 0
           gh release view test-latest --repo ${{ github.repository }} >/dev/null 2>&1 || \
             gh release create test-latest --repo ${{ github.repository }} --title "Latest test build" --notes "Unsigned test IPA."
           gh release upload test-latest --repo ${{ github.repository }} TouchTestApp-unsigned.ipa TouchTestApp-unsigned.ipa.sha256 --clobber
-          gh release edit test-latest --repo ${{ github.repository }} --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. UIKit native test suite with edge-to-edge canvas and movable game controls. Version 4.0, build ${{ github.run_number }}, commit ${{ github.sha }}. Three simulator categories passed native fullscreen/orientation checks. Physical-device and reference-image acceptance is still required."
+          gh release edit test-latest --repo ${{ github.repository }} --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. UIKit native test suite with edge-to-edge canvas, movable game controls and native video feed. Version 4.1, build ${{ github.run_number }}, commit ${{ github.sha }}. Three simulator categories passed native fullscreen/orientation checks; actual native gestures passed XCTest UI validation. Physical-device and reference-image acceptance is still required."

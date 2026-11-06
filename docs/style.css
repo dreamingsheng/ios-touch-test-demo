@@ -108,7 +108,7 @@ main.allow-scroll .menu-test{touch-action:pan-y}main:has(.menu-test) #message{di
 /* Fullscreen has no outer padding, letterboxing, or fixed diagnostic bars. */
 body.immersive #app main{width:100%!important;height:100%;margin:0;border:0}
 body.immersive .actions{top:calc(var(--control-top) + 8px)!important;right:calc(var(--control-right) + 8px)!important;bottom:auto!important}
-body.immersive .actions #clearBtn,body.immersive .actions #fullBtn{display:none}
+body.immersive .actions #fullBtn{display:none}
 .actions #menuBtn{background:#1116;color:#fff;border:1px solid #fff5;backdrop-filter:blur(8px);font-size:11px;padding:6px 9px}
 body.immersive #message{top:calc(var(--control-top) + 12px);max-width:calc(100% - var(--control-left) - var(--control-right) - 120px);font-size:10px;padding:4px 8px;background:#0007;border:0}
 .game-top{top:calc(var(--control-top) + 4px);left:calc(var(--control-left) + 6px);right:calc(var(--control-right) + 6px)}
@@ -139,3 +139,17 @@ body.immersive #message{top:calc(var(--control-top) + 12px);max-width:calc(100% 
 
 /* HUD editing temporarily makes the otherwise non-interactive status strip draggable. */
 .layout-edit .game-top{pointer-events:auto}
+
+/* v14 photo source/size controls keep the complete image visible by default. */
+.photo-world{width:min(76vw,560px);max-width:calc(100% - var(--control-left) - var(--control-right) - 28px);height:min(58vh,420px);aspect-ratio:4/3;background:#111;display:grid;place-items:center;overflow:hidden}
+.photo-world img{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none;user-select:none;-webkit-user-drag:none}
+.photo-tools{position:absolute;z-index:8;top:calc(var(--control-top) + 52px);left:calc(var(--control-left) + 10px);right:calc(var(--control-right) + 10px);display:flex;align-items:center;gap:7px;flex-wrap:wrap;pointer-events:auto}
+.photo-tools button,.photo-file{border:1px solid #fff5;border-radius:8px;background:#111b;color:#fff;padding:7px 9px;font-size:12px;backdrop-filter:blur(8px)}
+.photo-file input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}.photo-tools>label:not(.photo-file){display:flex;align-items:center;gap:6px;padding:3px 8px;border-radius:8px;background:#111b;font-size:11px}.photo-tools input[type=range]{width:clamp(110px,28vw,210px);height:28px;accent-color:#42d392}.photo-tools span{max-width:30vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:#fff;background:#0008;padding:4px 7px;border-radius:6px}
+
+/* Continuous vertical reading is the default; horizontal mode restores page dots/swipes. */
+.reader article{overscroll-behavior:contain;scroll-behavior:smooth}.reader article section{max-width:620px;margin:0 auto;padding:12px 0 28px;border-bottom:1px solid #c8c2b8}.reader article section:last-child{border-bottom:0;padding-bottom:40vh}.reader.horizontal article{overflow:hidden;touch-action:none}.reader.horizontal article section{height:100%;border:0;padding-bottom:0}.reader.horizontal .page-dots{display:flex}.reader:not(.horizontal) .page-dots{display:none}.reader-bar{gap:8px}.reader-bar span{flex:1;text-align:center}.reader-bar #readMode{min-width:78px;font-size:11px}
+
+/* Common MOBA controls are spread around the battlefield for independent touch checks. */
+.moba-action{position:absolute;z-index:5;display:grid;place-items:center;min-width:34px;height:30px;padding:0 6px;border:1px solid #fff7;border-radius:7px;background:#08182db8;color:#fff;font-size:9px;box-shadow:0 2px 7px #0008;user-select:none}.moba-action.active,.moba-action.selected{background:#e9c65b;color:#172033}.moba-action.shop{left:calc(var(--control-left) + 98px);top:calc(var(--control-top) + 6px)}.moba-action.score{left:50%;top:calc(var(--control-top) + 5px);transform:translateX(-50%)}.moba-action.signal{right:calc(var(--control-right) + 8px);top:calc(var(--control-top) + 8px)}.moba-action.chat{right:calc(var(--control-right) + 8px);top:calc(var(--control-top) + 45px)}.moba-action.upgrade{right:calc(var(--control-right) + 184px);bottom:calc(var(--control-bottom) + 118px);min-width:30px;border-radius:50%}.moba-action.last-hit{right:calc(var(--control-right) + 105px);bottom:calc(var(--control-bottom) + 8px)}.moba-action.tower{right:calc(var(--control-right) + 153px);bottom:calc(var(--control-bottom) + 8px)}.moba-action.lock{right:calc(var(--control-right) + 8px);top:38%;border-radius:50%;height:38px}.moba-popover{position:absolute;z-index:12;left:50%;top:50%;transform:translate(-50%,-50%);width:min(330px,70vw);padding:14px;border:1px solid #dfc873;border-radius:12px;background:#091425ed;color:#fff;box-shadow:0 12px 40px #000b;text-align:center}.moba-popover[hidden]{display:none}.moba-popover b,.moba-popover p,.moba-popover small{display:block;margin:4px 0 10px}.moba-popover button{margin:4px;padding:9px;border:1px solid #fff5;border-radius:8px;background:#243d60;color:#fff}
+@media(orientation:landscape) and (max-height:500px){.photo-tools{top:calc(var(--control-top) + 34px)}.photo-world{height:min(66vh,310px)}.moba-action{height:25px}.moba-action.chat{top:calc(var(--control-top) + 38px)}.moba-action.lock{top:40%}}
