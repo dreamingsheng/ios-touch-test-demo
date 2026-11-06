@@ -36,6 +36,19 @@
   let tapHits = 0, tapTotal = 0, hold = null, gesture = null, joystickId = null, aimId = null, crossIds = {axis:null,cursor:null};
   let skillPointers = new Map(), shots = 0, autoScore = {sum:0,count:0}, sceneSwipe = null, readPage = 0, videoIndex = 0;
   let videoStates=[],videoPaused=false;
+  let immersivePreferred=true,layoutDrag=null,joystickHomeStyle=null;
+  let hudLayouts={};try{hudLayouts=JSON.parse(localStorage.getItem('touch-hud-layouts')||'{}')}catch(_){}
+  const layoutKey=()=>mode+':'+(innerWidth>innerHeight?'landscape':'portrait');
+  function restoreHudLayout(){const saved=hudLayouts[layoutKey()]||{},r=stage.getBoundingClientRect();panel.querySelectorAll('[data-layout-key]').forEach(el=>{const p=saved[el.dataset.layoutKey];el.style.translate=p?`${p.x*r.width}px ${p.y*r.height}px`:''})}
+  function startLayoutDrag(e){
+    if(!document.body.classList.contains('layout-edit'))return false;
+    const el=e.target.closest('[data-layout-key]');if(!el)return true;
+    e.preventDefault();stage.setPointerCapture?.(e.pointerId);
+    const r=el.getBoundingClientRect(),s=stage.getBoundingClientRect(),saved=hudLayouts[layoutKey()]?.[el.dataset.layoutKey]||{x:0,y:0};
+    layoutDrag={id:e.pointerId,el,x:e.clientX,y:e.clientY,dx:saved.x*s.width,dy:saved.y*s.height,rect:r,stage:s};return true;
+  }
+  function moveLayoutDrag(e){if(layoutDrag?.id!==e.pointerId)return false;e.preventDefault();const d=layoutDrag,dx=Math.max(d.stage.left-d.rect.left,Math.min(d.stage.right-d.rect.right,e.clientX-d.x)),dy=Math.max(d.stage.top-d.rect.top,Math.min(d.stage.bottom-d.rect.bottom,e.clientY-d.y));d.el.style.translate=`${d.dx+dx}px ${d.dy+dy}px`;d.position={x:(d.dx+dx)/d.stage.width,y:(d.dy+dy)/d.stage.height};return true}
+  function finishLayoutDrag(e){if(layoutDrag?.id!==e.pointerId)return false;const d=layoutDrag;if(d.position){hudLayouts[layoutKey()]??={};hudLayouts[layoutKey()][d.el.dataset.layoutKey]=d.position;try{localStorage.setItem('touch-hud-layouts',JSON.stringify(hudLayouts))}catch(_){}}layoutDrag=null;return true}
   const sessionStarted=new Date().toISOString(), sampleLimit=10000, samples=[], modeResults=new Map();
   let sampleCount=0,nextTouchOrder=1;
   function recordSample(e,p,phase,source='dispatched'){
@@ -46,7 +59,7 @@
   }
   function snapshotMode(){modeResults.set(mode,{name:copy[mode][0],observedAt:new Date().toISOString(),metrics:Array.from({length:4},(_,i)=>({label:$(`#l${i}`).textContent,value:$(`#v${i}`).textContent})),verdict:'未人工验收'})}
   function reportData(includeSamples=false){
-    const data={version:12,startedAt:sessionStarted,exportedAt:new Date().toISOString(),deviceNotes:$('#reportDevice').value,environment:{userAgent:navigator.userAgent,platform:navigator.platform,pixelRatio:devicePixelRatio,viewport:[innerWidth,innerHeight],standalone:isStandalone,coalescedEventsAvailable:typeof PointerEvent!=='undefined'&&typeof PointerEvent.prototype.getCoalescedEvents==='function'},limits:{coordinateUnit:'CSS px relative to test stage',timeUnit:'browser event timeStamp in ms; system/browser processed input, not IC raw reports',sampleLimit,retained:samples.length,totalObserved:sampleCount,dropped:sampleCount-samples.length,hardwareVerdict:'未人工验收'},modes:[...modeResults.entries()].map(([key,value])=>({key,...value}))};
+    const data={version:13,startedAt:sessionStarted,exportedAt:new Date().toISOString(),deviceNotes:$('#reportDevice').value,environment:{userAgent:navigator.userAgent,platform:navigator.platform,pixelRatio:devicePixelRatio,viewport:[innerWidth,innerHeight],standalone:isStandalone,coalescedEventsAvailable:typeof PointerEvent!=='undefined'&&typeof PointerEvent.prototype.getCoalescedEvents==='function'},limits:{coordinateUnit:'CSS px relative to test stage',timeUnit:'browser event timeStamp in ms; system/browser processed input, not IC raw reports',sampleLimit,retained:samples.length,totalObserved:sampleCount,dropped:sampleCount-samples.length,hardwareVerdict:'未人工验收'},modes:[...modeResults.entries()].map(([key,value])=>({key,...value}))};
     if(includeSamples)data.samples=samples;return data;
   }
   function refreshReport(){snapshotMode();$('#reportPreview').value=JSON.stringify(reportData(),null,2);$('#reportStatus').textContent=`保留 ${samples.length} / ${sampleCount} 条采样 · 丢弃 ${sampleCount-samples.length} 条（上限 ${sampleLimit}）`}
@@ -102,6 +115,7 @@
   function updateTouchStats(){if(['multi','draw','line'].includes(mode)){val(0,active.size);val(1,maxTouches)}}
 
   function pointerDown(e){
+    if(['moba','aim'].includes(mode)&&startLayoutDrag(e))return;
     if(['ui','menu','type'].includes(mode)) return;
     if(mode==='video'&&$('.video-sheet'))return;
     if(e.target.closest('button,input,textarea,select,label') && !e.target.closest('.fire')) return;
@@ -121,6 +135,7 @@
     redrawOverlay();
   }
   function pointerMove(e,record=true){
+    if(moveLayoutDrag(e))return;
     if(!active.has(e.pointerId))return;e.preventDefault();
     const previous=active.get(e.pointerId);let old=previous,p=old;
     const movement=movementSamples(e);
@@ -143,6 +158,7 @@
     redrawOverlay();
   }
   function pointerUp(e){
+    if(finishLayoutDrag(e))return;
     const p=active.get(e.pointerId);if(!p)return;eventBucket++;
     if(e.type==='pointerup'&&Number.isFinite(e.clientX)&&Number.isFinite(e.clientY)){
       const end=pointFromEvent(e,p);
@@ -257,11 +273,11 @@
   }
 
   function gameHTML(aim=false){return `<div class="game ${aim?'shooter-game':'moba-game'}"><div class="game-top"><div class="mini-map"><i></i><i></i><i></i></div><div class="match-info">${aim?'<b>NW · 330 · N · 30 · NE</b><span>剩余 48 · 淘汰 3</span>':'<b><em>12</em>　VS　<em>9</em>　08:36</b><span>FPS 60　　训练场</span>'}</div><div class="game-status" id="ammoStatus">${aim?'40 / 180':'Lv. 15'}</div></div><div class="player-state"><span></span><i></i></div><div class="joystick" id="joyBase"><div class="joy-knob" id="joyKnob"></div></div>${aim?'<div class="aim-zone"></div><div class="crosshair" id="crosshair"></div><div class="weapon-bar" id="weaponBar">M416　40 / 180　　单发 / 连发</div><div class="shooter-stance"><div class="stance-control" data-stance="蹲下">蹲</div><div class="stance-control" data-stance="趴下">趴</div><div class="stance-control" data-stance="跳跃">跳</div></div><div class="fire" id="fire">开火</div>':'<div class="skill-vector" id="castIndicator"></div><div class="skills"><div class="skill utility">闪现</div><div class="skill skill-one"><b>✦</b><small>斩击</small></div><div class="skill skill-two"><b>ϟ</b><small>突进</small></div><div class="skill skill-three"><b>✺</b><small>爆发</small></div><div class="skill big"><b>⚔</b><small>攻击</small></div></div><div class="moba-utilities"><div class="skill auxiliary">回城</div><div class="skill auxiliary">恢复</div></div>'}</div>`}
-  function buildGame(aim=false){showPanel(gameHTML(aim));joystickId=aimId=null;skillPointers.clear();shots=0;setStats(['触点','左轴','事件/秒',aim?'开火':'技能'],['0','0,0','0','0']);if(aim){const r=stage.getBoundingClientRect(),c=$('#crosshair');c.style.left=r.width*.5+'px';c.style.top=r.height*.48+'px'}}
-  function gameDown(e,p,aim){const r=stage.getBoundingClientRect(),control=e.target.closest(aim?'.fire,.stance-control':'.skill');if(control){control.classList.add('active');skillPointers.set(e.pointerId,control);if(aim&&control.matches('.fire')){shots++;val(3,shots);$('#ammoStatus').textContent=(40-shots%40)+' / 180'}else if(aim){val(3,control.dataset.stance)}else val(3,skillPointers.size)}else if(p.x<r.width*.45&&p.y>r.height*.3&&joystickId===null){joystickId=e.pointerId;updateJoystick(p)}else if(aim&&p.x>r.width*.45&&aimId===null){aimId=e.pointerId}val(0,active.size)}
+  function buildGame(aim=false){showPanel(gameHTML(aim));joystickId=aimId=null;skillPointers.clear();shots=0;joystickHomeStyle=null;setStats(['触点','左轴','事件/秒',aim?'开火':'技能'],['0','0,0','0','0']);if(aim){const r=stage.getBoundingClientRect(),c=$('#crosshair');c.style.left=r.width*.5+'px';c.style.top=r.height*.48+'px'}panel.querySelectorAll('.joystick,.mini-map,.match-info,.game-status,.player-state,.skill,.fire,.weapon-bar,.stance-control').forEach((el,i)=>el.dataset.layoutKey='control-'+i);restoreHudLayout();if(window.touchTestNative)window.webkit?.messageHandlers?.touchTestNative.postMessage({action:'orientation',value:'landscape'});else if(document.fullscreenElement)screen.orientation?.lock?.('landscape').catch(()=>{})}
+  function gameDown(e,p,aim){const r=stage.getBoundingClientRect(),control=e.target.closest(aim?'.fire,.stance-control':'.skill');if(control){control.classList.add('active');skillPointers.set(e.pointerId,control);if(aim&&control.matches('.fire')){shots++;val(3,shots);$('#ammoStatus').textContent=(40-shots%40)+' / 180'}else if(aim){val(3,control.dataset.stance)}else val(3,skillPointers.size)}else if(p.x<r.width*.45&&p.y>r.height*.3&&joystickId===null){joystickId=e.pointerId;const base=$('#joyBase');joystickHomeStyle=base.style.cssText;base.style.translate='none';base.style.left=(p.x-base.offsetWidth/2)+'px';base.style.top=(p.y-base.offsetHeight/2)+'px';base.style.bottom='auto';base.style.right='auto';updateJoystick(p)}else if(aim&&p.x>r.width*.45&&aimId===null){aimId=e.pointerId}val(0,active.size)}
   function gameMove(id,p,aim,old){if(id===joystickId)updateJoystick(p);if(!aim&&skillPointers.has(id)){const button=skillPointers.get(id);if(button.classList.contains('skill-one')||button.classList.contains('skill-two')||button.classList.contains('skill-three')){const r=stage.getBoundingClientRect(),b=button.getBoundingClientRect(),dx=p.x-(b.left-r.left+b.width/2),dy=p.y-(b.top-r.top+b.height/2),indicator=$('#castIndicator');indicator.style.display='block';indicator.style.transform='rotate('+Math.atan2(dy,dx)+'rad)';val(3,Math.round(Math.atan2(dy,dx)*180/Math.PI)+'°')}}if(aim&&id===aimId&&old){const c=$('#crosshair'),r=stage.getBoundingClientRect(),x=Math.max(0,Math.min(r.width,parseFloat(c.style.left||r.width*.72)+(p.x-old.x))),y=Math.max(0,Math.min(r.height,parseFloat(c.style.top||r.height*.45)+(p.y-old.y)));c.style.left=x+'px';c.style.top=y+'px';val(3,`${Math.round(x)},${Math.round(y)}`)}}
   function updateJoystick(p){const base=$('#joyBase'),knob=$('#joyKnob'),sr=stage.getBoundingClientRect(),br=base.getBoundingClientRect(),cx=br.left-sr.left+br.width/2,cy=br.top-sr.top+br.height/2,max=br.width*.34,dx=p.x-cx,dy=p.y-cy,d=Math.hypot(dx,dy)||1,k=Math.min(1,max/d),x=dx*k,y=dy*k;knob.style.transform=`translate(${x}px,${y}px)`;val(1,`${(x/max).toFixed(2)},${(y/max).toFixed(2)}`)}
-  function gameUp(id){if(id===joystickId){joystickId=null;const k=$('#joyKnob');if(k)k.style.transform='';val(1,'0,0')}if(id===aimId)aimId=null;const el=skillPointers.get(id);skillPointers.delete(id);if(el&&![...skillPointers.values()].includes(el))el.classList.remove('active');val(0,Math.max(0,active.size-1));if(mode==='moba'){val(3,skillPointers.size);if(!skillPointers.size&&$('#castIndicator'))$('#castIndicator').style.display='none'}}
+  function gameUp(id){if(id===joystickId){joystickId=null;const k=$('#joyKnob'),base=$('#joyBase');if(k)k.style.transform='';if(base&&joystickHomeStyle!==null)base.style.cssText=joystickHomeStyle;joystickHomeStyle=null;val(1,'0,0')}if(id===aimId)aimId=null;const el=skillPointers.get(id);skillPointers.delete(id);if(el&&![...skillPointers.values()].includes(el))el.classList.remove('active');val(0,Math.max(0,active.size-1));if(mode==='moba'){val(3,skillPointers.size);if(!skillPointers.size&&$('#castIndicator'))$('#castIndicator').style.display='none'}}
 
   function buildUI(){const rows=Array.from({length:12},(_,i)=>`<div class="setting-row"><span>测试项目 ${i+1}</span><label class="switch"><input type="checkbox"><i></i></label></div>`).join('');showPanel(`<div class="settings-test"><div class="setting-card"><h3>常用设置操作</h3><div class="setting-row"><span>触控反馈</span><label class="switch"><input type="checkbox" checked><i></i></label></div><div class="setting-row"><span>模式切换</span><div class="segment"><button class="on">标准</button><button>游戏</button><button>护眼</button></div></div><div class="setting-row"><span>灵敏度</span><b id="rangeValue">50</b></div><input id="range" type="range" min="0" max="100" value="50"><div class="setting-row"><span>刷新率</span><select><option>60 Hz</option><option>90 Hz</option><option>120 Hz</option></select></div></div><div class="setting-card"><h3>列表滚动与点击</h3>${rows}</div></div>`);setStats(['切换次数','滑块值','事件/秒','滚动'],['0','50','0','正常']);let n=0;panel.querySelectorAll('.segment button').forEach(b=>b.onclick=()=>{b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');val(0,++n)});panel.querySelectorAll('input[type=checkbox],select').forEach(x=>x.onchange=()=>val(0,++n));$('#range').oninput=e=>{val(1,e.target.value);$('#rangeValue').textContent=e.target.value}}
   function buildMenu(){
@@ -306,7 +322,7 @@
     stage.classList.toggle('allow-scroll',['ui','menu','type','read'].includes(mode));stage.classList.toggle('game-mode',['moba','aim','cross','video'].includes(mode));document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#modeName').textContent=copy[mode][0];$('#message').textContent=copy[mode][1];
     document.body.classList.toggle('scene-game',['moba','aim'].includes(mode));
     document.body.classList.toggle('scene-shooter',mode==='aim');
-    document.body.classList.toggle('immersive',['moba','aim','video'].includes(mode));$('#fullBtn').textContent=['moba','aim','video'].includes(mode)?'退出':'沉浸';
+    document.body.classList.remove('layout-edit');layoutDrag=null;document.body.classList.toggle('immersive',immersivePreferred);$('#fullBtn').textContent=immersivePreferred?'工具栏':'全屏';
     if(mode==='multi')setStats(['当前触点','最大触点','采样/秒','坐标/压力'],['0','0','0','—']);
     else if(mode==='draw')setStats(['当前触点','最大触点','事件/秒','画笔'],['0','0','0','多指']);
     else if(mode==='line'){lineHit.clear();setStats(['当前触点','最大触点','事件/秒','覆盖率'],['0','0','0','0%']);drawGuides()}
@@ -317,13 +333,18 @@
     resize();
   }
   function reset(){setMode(mode)}
-  function toggleImmersive(){const on=document.body.classList.toggle('immersive');$('#fullBtn').textContent=on?'退出':'沉浸';if(on&&!isStandalone&&isIOS)$('#message').textContent='Safari 会保留工具栏：请添加到主屏幕后从桌面打开';else if(on&&document.fullscreenEnabled&&!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});else if(!on&&document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});setTimeout(syncViewport,80)}
+  function toggleImmersive(){const on=document.body.classList.toggle('immersive');immersivePreferred=on;$('#fullBtn').textContent=on?'工具栏':'全屏';if(on&&!isStandalone&&isIOS)$('#message').textContent='Safari 会保留工具栏：请添加到主屏幕后从桌面打开';else if(on&&document.fullscreenEnabled&&!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});else if(!on&&document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});setTimeout(syncViewport,80)}
 
   stage.addEventListener('pointerdown',pointerDown,{passive:false});stage.addEventListener('pointermove',pointerMove,{passive:false});stage.addEventListener('pointerup',pointerUp,{passive:false});stage.addEventListener('pointercancel',pointerUp,{passive:false});stage.addEventListener('lostpointercapture',pointerUp);
-  function cancelActive(){for(const id of [...active.keys()])pointerUp({pointerId:id,type:'pointercancel'})}
+  function cancelActive(){if(layoutDrag)finishLayoutDrag({pointerId:layoutDrag.id});for(const id of [...active.keys()])pointerUp({pointerId:id,type:'pointercancel'})}
   addEventListener('blur',cancelActive);document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelActive();if(mode==='ghost'&&ghostLeft>0){clearInterval(modeTimer);modeTimer=null;ghostLeft=0;$('#ghostTime').textContent='中断';val(3,'中断');$('#ghostText').textContent='离开前台，结果无效；请重置后重新测试'}}});
   stage.addEventListener('pointerdown',e=>{const p=active.get(e.pointerId);if(!p)return;if(mode==='grid')hitGrid(p);if(mode==='edge')hitEdge(p)},{passive:false});
   $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=reset;$('#fullBtn').onclick=toggleImmersive;
+  $('#modeChoices').innerHTML=[...document.querySelectorAll('#nav button')].map(b=>`<button data-choice="${b.dataset.mode}">${b.textContent}</button>`).join('');
+  $('#menuBtn').onclick=()=>{cancelActive();$('#modeChoices').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.choice===mode));$('#editGameLayout').hidden=$('#resetGameLayout').hidden=!['moba','aim'].includes(mode);$('#editGameLayout').textContent=document.body.classList.contains('layout-edit')?'完成控件移动':'移动游戏控件';$('#modeDialog').showModal()};
+  $('#modeChoices').onclick=e=>{const b=e.target.closest('[data-choice]');if(b){$('#modeDialog').close();setMode(b.dataset.choice)}};$('#closeModes').onclick=()=>$('#modeDialog').close();
+  $('#menuReset').onclick=()=>{$('#modeDialog').close();reset()};$('#menuReport').onclick=()=>{$('#modeDialog').close();openReport()};$('#menuChrome').onclick=()=>{$('#modeDialog').close();toggleImmersive()};
+  $('#editGameLayout').onclick=()=>{cancelActive();document.body.classList.toggle('layout-edit');$('#modeDialog').close()};$('#resetGameLayout').onclick=()=>{delete hudLayouts[layoutKey()];try{localStorage.setItem('touch-hud-layouts',JSON.stringify(hudLayouts))}catch(_){}restoreHudLayout();$('#modeDialog').close();document.body.classList.remove('layout-edit')};
   $('#reportBtn').onclick=openReport;$('#closeReport').onclick=()=>{const dialog=$('#reportDialog');if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open')};$('#reportDevice').oninput=refreshReport;$('#exportJson').onclick=()=>downloadReport('json');$('#exportCsv').onclick=()=>downloadReport('csv');
   $('#safeBtn').onclick=()=>{cancelActive();$('#safeDialog').showModal()};$('#closeSafe').onclick=()=>$('#safeDialog').close();$('#topInset').oninput=applySafeInsets;$('#bottomInset').oninput=applySafeInsets;$('#resetSafe').onclick=()=>{$('#topInset').value=0;$('#bottomInset').value=0;applySafeInsets()};
   try{const saved=JSON.parse(localStorage.getItem('touch-safe-insets')||'{}');for(const side of ['top','bottom'])$(`#${side}Inset`).value=Math.max(0,Math.min(100,+saved[side]||0))}catch(_){}applySafeInsets();

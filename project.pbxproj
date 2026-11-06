@@ -8,6 +8,12 @@
 		AA0000010000000000000001 /* TouchTestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000001 /* TouchTestApp.swift */; };
 		AA0000010000000000000002 /* TouchTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000002 /* TouchTestView.swift */; };
 		AA0000010000000000000003 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = AA0000020000000000000004 /* Web */; };
+		AA0000010000000000000005 = {isa = PBXBuildFile; fileRef = AA0000020000000000000005; };
+		AA0000010000000000000006 = {isa = PBXBuildFile; fileRef = AA0000020000000000000006; };
+		AA0000010000000000000007 = {isa = PBXBuildFile; fileRef = AA0000020000000000000007; };
+		AA0000020000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSuite.swift; sourceTree = "<group>"; };
+		AA0000020000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeEverydayScenes.swift; sourceTree = "<group>"; };
+		AA0000020000000000000007 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeGameScene.swift; sourceTree = "<group>"; };
 		AA0000020000000000000004 /* Web */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Web; sourceTree = "<group>"; };
 		AA0000020000000000000001 /* TouchTestApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchTestApp.swift; sourceTree = "<group>"; };
 		AA0000020000000000000002 /* TouchTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchTestView.swift; sourceTree = "<group>"; };
@@ -26,6 +32,9 @@
 			children = (
 				AA0000020000000000000001 /* TouchTestApp.swift */,
 				AA0000020000000000000002 /* TouchTestView.swift */,
+				AA0000020000000000000005,
+				AA0000020000000000000006,
+				AA0000020000000000000007,
 				AA0000020000000000000004 /* Web */,
 			);
 			path = TouchTestApp;
@@ -44,6 +53,9 @@
 			files = (
 				AA0000010000000000000001 /* TouchTestApp.swift in Sources */,
 				AA0000010000000000000002 /* TouchTestView.swift in Sources */,
+				AA0000010000000000000005,
+				AA0000010000000000000006,
+				AA0000010000000000000007,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,7 +113,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
@@ -127,7 +139,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;

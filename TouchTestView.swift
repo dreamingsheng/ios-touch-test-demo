@@ -148,12 +148,14 @@ struct TouchTestView: View {
             .background(Color(uiColor: .systemGroupedBackground)).navigationTitle("触控诊断")
         }.tint(.white)
         .fullScreenCover(isPresented: $showSuite) {
-            OfflineSuiteView { showSuite = false }
+            NativeSuiteView()
                 .ignoresSafeArea()
                 .statusBarHidden(true)
                 .persistentSystemOverlays(.hidden)
         }
-        .onAppear { if ProcessInfo.processInfo.arguments.contains("--offline-suite") { showSuite = true } }
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
+        .onAppear { showSuite = true }
     }
 }
 

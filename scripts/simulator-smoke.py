@@ -56,45 +56,49 @@ for device in selected:
         for attempt in range(60):
             if layout_file.exists(): break
             time.sleep(1)
-        assert layout_file.exists(), 'App did not produce initial WebKit layout evidence'
+        assert layout_file.exists(), 'App did not produce initial native layout evidence'
         name = device['name'].replace(' ', '-').replace('(', '').replace(')', '')
-        for landscape in [False, True]:
-            for mode in modes:
-                sequence = ('landscape' if landscape else 'portrait')+'-'+mode
-                (documents / 'smoke-command.json').write_text(json.dumps({'sequence': sequence, 'mode': mode, 'orientation': 'landscape' if landscape else 'portrait'}))
-                layout = None
-                last_observed = None
-                for attempt in range(90):
-                    try:
-                        observed = json.loads(layout_file.read_text())
-                        if observed.get('requestSequence') == sequence:
-                            last_observed = observed
-                            if observed.get('layoutStable'):
-                                layout = observed
-                                break
-                    except (OSError, ValueError): pass
-                    time.sleep(.5)
-                if last_observed:
-                    (output / f'{name}-{sequence}.json').write_text(json.dumps(last_observed, indent=2))
-                assert layout is not None, f'No stable evidence for {sequence}: {last_observed}'
-                assert layout['activeMode'] == mode and layout['modeCount'] == 21 and expected_version in layout['title'], layout
-                viewport = layout['viewport']
-                assert (viewport['width'] > viewport['height']) == landscape, layout
-                assert layout['orientation'] in ([3, 4] if landscape else [1, 2]), layout
-                inset, stage = layout['safeInsets'], layout['stage']
-                top = layout['header']['top'] if layout['header']['height'] else stage['top']
-                bottom = layout['nav']['bottom'] if layout['nav']['height'] else stage['bottom']
-                assert top >= inset['top'] + 3 and bottom <= viewport['height'] - inset['bottom'] - 3, layout
-                assert stage['left'] >= inset['left'] + 3 and stage['right'] <= viewport['width'] - inset['right'] - 3, layout
-                assert abs(layout['app']['width']-viewport['width']) <= 1 and abs(layout['app']['height']-viewport['height']) <= 1, layout
-                assert abs(layout['body']['width']-viewport['width']) <= 1, layout
-                screenshot = output / f'{name}-{sequence}.png'
-                run('xcrun', 'simctl', 'io', udid, 'screenshot', str(screenshot))
-                width, height = struct.unpack('>II', screenshot.read_bytes()[16:24])
-                (output / (screenshot.stem + '.json')).write_text(json.dumps(layout, indent=2))
-                evidence.append({'device': device['name'], 'landscape': landscape, 'mode': mode, 'pixels': [width, height], 'viewport': viewport, 'file': str(screenshot), 'launch': launched.strip()})
-                (output / 'results.json').write_text(json.dumps(evidence, indent=2))
-                print('Verified '+device['name']+' '+sequence, flush=True)
+        cases = [(False, mode, False) for mode in modes] + [(True, mode, False) for mode in modes]
+        # Automatic game entry must request landscape itself, separately from
+        # explicitly rotated portrait/landscape compatibility checks.
+        cases += [(True, 'moba', True), (True, 'aim', True)]
+        for landscape, mode, automatic in cases:
+            sequence = ('automatic-' if automatic else '')+('landscape' if landscape else 'portrait')+'-'+mode
+            (documents / 'smoke-command.json').write_text(json.dumps({'sequence': sequence, 'mode': mode, 'orientation': 'automatic' if automatic else ('landscape' if landscape else 'portrait')}))
+            layout = None
+            last_observed = None
+            for attempt in range(90):
+                try:
+                    observed = json.loads(layout_file.read_text())
+                    if observed.get('requestSequence') == sequence:
+                        last_observed = observed
+                        if observed.get('layoutStable'):
+                            layout = observed
+                            break
+                except (OSError, ValueError): pass
+                time.sleep(.5)
+            if last_observed:
+                (output / f'{name}-{sequence}.json').write_text(json.dumps(last_observed, indent=2))
+            assert layout is not None, f'No stable evidence for {sequence}: {last_observed}'
+            assert layout['activeMode'] == mode and layout['modeCount'] == 21 and expected_version in layout['title'], layout
+            viewport = layout['viewport']
+            assert (viewport['width'] > viewport['height']) == landscape, layout
+            assert layout['orientation'] in ([3, 4] if landscape else [1, 2]), layout
+            assert layout['implementation'] == 'UIKit' and layout['statusBarHidden'] is True, layout
+            inset, stage = layout['safeInsets'], layout['stage']
+            assert stage['top'] == 0 and stage['left'] == 0 and stage['right'] == viewport['width'] and stage['bottom'] == viewport['height'], layout
+            menu = layout['menu']
+            assert menu['top'] >= inset['top'] and menu['bottom'] <= viewport['height'] - inset['bottom'], layout
+            assert menu['left'] >= inset['left'] and menu['right'] <= viewport['width'] - inset['right'], layout
+            assert abs(layout['app']['width']-viewport['width']) <= 1 and abs(layout['app']['height']-viewport['height']) <= 1, layout
+            assert abs(layout['body']['width']-viewport['width']) <= 1, layout
+            screenshot = output / f'{name}-{sequence}.png'
+            run('xcrun', 'simctl', 'io', udid, 'screenshot', str(screenshot))
+            width, height = struct.unpack('>II', screenshot.read_bytes()[16:24])
+            (output / (screenshot.stem + '.json')).write_text(json.dumps(layout, indent=2))
+            evidence.append({'device': device['name'], 'landscape': landscape, 'mode': mode, 'pixels': [width, height], 'viewport': viewport, 'file': str(screenshot), 'launch': launched.strip()})
+            (output / 'results.json').write_text(json.dumps(evidence, indent=2))
+            print('Verified '+device['name']+' '+sequence, flush=True)
     finally:
         subprocess.run(['xcrun', 'simctl', 'shutdown', udid], check=False, capture_output=True, timeout=45)
         subprocess.run(['xcrun', 'simctl', 'delete', udid], check=False, capture_output=True, timeout=45)

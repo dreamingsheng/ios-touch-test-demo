@@ -74,10 +74,11 @@ nav{background:#080808;border-color:#333}nav button{background:#151515;border-co
 #reportDialog{position:fixed;max-width:640px;width:calc(100% - 24px - 0px - 0px);max-height:calc(100dvh - 24px - 0px - 0px);overflow:auto;margin:auto;padding:16px;border:1px solid #666;border-radius:18px;background:#111;color:white;touch-action:pan-y}
 #reportDialog::backdrop{background:#000b}.report-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.report-heading h2{font-size:18px;margin:0}#reportDialog p,#reportDialog label{font-size:12px;line-height:1.6}#reportDialog button{border:1px solid #777;border-radius:8px;padding:7px 10px;background:#fff;color:#000}#reportDialog input,#reportDialog textarea{display:block;width:100%;padding:10px;border:1px solid #666;border-radius:8px;background:#050505;color:#fff;font-size:16px;margin-top:6px}#reportPreview{height:210px;resize:vertical;font:11px/1.5 ui-monospace,monospace}.report-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 
-/* One safe frame for all content. Never add device insets again inside the stage. */
+/* Only controls avoid the system area. The rendered test surface stays edge to edge. */
 :root{--safe-top:max(env(safe-area-inset-top,0px),var(--native-safe-top,0px),var(--fallback-safe-top,0px));--safe-right:max(env(safe-area-inset-right,0px),var(--native-safe-right,0px),var(--fallback-safe-right,0px));--safe-bottom:max(env(safe-area-inset-bottom,0px),var(--native-safe-bottom,0px),var(--fallback-safe-bottom,0px));--safe-left:max(env(safe-area-inset-left,0px),var(--native-safe-left,0px),var(--fallback-safe-left,0px))}
-#app{padding:calc(var(--safe-top) + var(--manual-top,0px) + 4px) calc(var(--safe-right) + 4px) calc(var(--safe-bottom) + var(--manual-bottom,0px) + 4px) calc(var(--safe-left) + 4px)}
-#app header{padding-top:7px;padding-right:10px;padding-left:10px}#app nav{max-width:100%;padding-bottom:6px;padding-left:7px;padding-right:7px}
+#app{padding:0;--control-top:0px;--control-bottom:0px;--control-left:var(--safe-left);--control-right:var(--safe-right)}
+#app header{padding-top:calc(7px + var(--safe-top) + var(--manual-top,0px));padding-right:calc(10px + var(--safe-right));padding-left:calc(10px + var(--safe-left))}#app nav{max-width:100%;padding-bottom:calc(6px + var(--safe-bottom) + var(--manual-bottom,0px));padding-left:calc(7px + var(--safe-left));padding-right:calc(7px + var(--safe-right))}
+body.immersive #app{--control-top:calc(var(--safe-top) + var(--manual-top,0px));--control-bottom:calc(var(--safe-bottom) + var(--manual-bottom,0px))}
 body.immersive #app main{margin:0}
 #safeBtn{border:1px solid #555;border-radius:7px;background:#151515;color:#fff;padding:4px 8px;font-size:11px;white-space:nowrap}.title{gap:7px}.title h1{font-size:16px}#reportBtn{white-space:nowrap}
 #safeDialog{position:fixed;margin:auto;width:min(430px,calc(100% - 32px));max-height:calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px);overflow:auto;background:#111;color:white;border:1px solid #777;border-radius:16px;padding:18px}#safeDialog::backdrop{background:#000a}#safeDialog label{display:block;margin:18px 0;font-size:14px}#safeDialog input{display:block;width:100%;margin-top:12px;accent-color:white}#safeDialog button{border:1px solid #777;border-radius:8px;padding:8px 12px;background:#fff;color:black}#safeDialog p{font-size:12px;line-height:1.6}#reportDialog{max-height:calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px)}
@@ -103,3 +104,38 @@ main:has(.video-feed) #message{display:none}main:has(.video-feed) .actions{top:4
 main.allow-scroll .menu-test{touch-action:pan-y}main:has(.menu-test) #message{display:none}
 .menu-test{padding-top:0}.menu-head{top:0;margin:0 -12px 14px}.menu-row input[type=range]{width:55%;accent-color:#111;touch-action:manipulation}
 @media(orientation:landscape) and (max-height:500px){header{padding-top:4px;padding-bottom:3px}.title h1{font-size:13px}#stats{margin-top:2px}.stat{padding:2px}.stat b{font-size:11px}.stat span{font-size:8px}nav{padding-top:3px;padding-bottom:calc(3px + 0px)}nav button{min-height:28px;padding:5px}main.game-mode .actions,main.game-mode #message{top:8px}main.game-mode #message{left:25%;max-width:43%;font-size:10px}.game-top{top:38px;height:50px}.mini-map{width:46px;height:46px}.joystick{width:110px;height:110px;bottom:16px}.joy-knob{width:50px;height:50px;left:28px;top:28px}.skills{bottom:14px}.skill{width:45px;height:45px}.skill.big{width:62px;height:62px}.reader-bar{padding-top:40px;padding-bottom:4px}.reader article{font-size:14px;line-height:1.5}.page-dots{padding:4px}.video-side{display:flex;bottom:auto;top:24%;right:16px;gap:8px}.video-side button{width:40px;height:40px;font-size:20px}.player-state{bottom:20%}}
+
+/* Fullscreen has no outer padding, letterboxing, or fixed diagnostic bars. */
+body.immersive #app main{width:100%!important;height:100%;margin:0;border:0}
+body.immersive .actions{top:calc(var(--control-top) + 8px)!important;right:calc(var(--control-right) + 8px)!important;bottom:auto!important}
+body.immersive .actions #clearBtn,body.immersive .actions #fullBtn{display:none}
+.actions #menuBtn{background:#1116;color:#fff;border:1px solid #fff5;backdrop-filter:blur(8px);font-size:11px;padding:6px 9px}
+body.immersive #message{top:calc(var(--control-top) + 12px);max-width:calc(100% - var(--control-left) - var(--control-right) - 120px);font-size:10px;padding:4px 8px;background:#0007;border:0}
+.game-top{top:calc(var(--control-top) + 4px);left:calc(var(--control-left) + 6px);right:calc(var(--control-right) + 6px)}
+.joystick{left:calc(var(--control-left) + 26px);bottom:calc(var(--control-bottom) + 30px)}
+.skills{right:calc(var(--control-right) + 18px);bottom:calc(var(--control-bottom) + 16px)}
+.moba-utilities{bottom:calc(var(--control-bottom) + 16px)}
+.fire{right:calc(var(--control-right) + 30px);bottom:calc(var(--control-bottom) + 102px)}
+.weapon-bar,.shooter-game .weapon-bar{bottom:calc(var(--control-bottom) + 28px)}
+.shooter-stance{right:calc(var(--control-right) + 20px);bottom:calc(var(--control-bottom) + 20px)}
+.shooter-game .player-state{bottom:calc(var(--control-bottom) + 5px)}
+.feed-tabs{top:calc(var(--control-top) + 16px);left:var(--control-left);right:calc(var(--control-right) + 52px);gap:20px}
+.feed-bottom{height:calc(44px + var(--control-bottom));padding:0 var(--control-right) var(--control-bottom) var(--control-left)}
+.video-caption{bottom:calc(52px + var(--control-bottom));left:calc(var(--control-left) + 14px);right:calc(var(--control-right) + 78px)}
+.video-side{right:calc(var(--control-right) + 14px)}
+.video-sheet{bottom:calc(var(--control-bottom) + 10px);left:calc(var(--control-left) + 10px);right:calc(var(--control-right) + 10px);max-height:calc(100% - var(--control-top) - var(--control-bottom) - 20px)}
+.map-search{top:calc(var(--control-top) + 12px);left:calc(var(--control-left) + 12px);right:calc(var(--control-right) + 64px)}
+.map-locate{top:calc(var(--control-top) + 85px);right:calc(var(--control-right) + 14px)}
+.map-sheet{padding-left:calc(var(--control-left) + 18px);padding-right:calc(var(--control-right) + 18px);padding-bottom:calc(var(--control-bottom) + 16px)}
+.settings-test,.typing-test{padding-top:calc(var(--control-top) + 58px);padding-left:calc(var(--control-left) + 16px);padding-right:calc(var(--control-right) + 16px);padding-bottom:calc(var(--control-bottom) + 30px)}
+.menu-test{padding:var(--control-top) calc(var(--control-right) + 12px) calc(var(--control-bottom) + 40px) calc(var(--control-left) + 12px)}
+.menu-head{padding-top:12px;padding-right:64px}
+.reader-bar{padding-top:calc(var(--control-top) + 48px);padding-left:calc(var(--control-left) + 16px);padding-right:calc(var(--control-right) + 16px)}
+.reader article{padding-left:calc(var(--control-left) + 26px);padding-right:calc(var(--control-right) + 26px)}
+.page-dots{padding-bottom:calc(var(--control-bottom) + 18px)}
+#modeDialog{width:min(600px,calc(100% - var(--safe-left) - var(--safe-right) - 24px));max-height:calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px);margin:auto;overflow:auto;padding:18px;border:1px solid #777;border-radius:16px;background:#111;color:#fff;touch-action:pan-y}
+#modeDialog::backdrop{background:#0007}#modeChoices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0}#modeDialog button{border:1px solid #555;background:#222;color:#fff;padding:10px 8px;border-radius:8px;font-size:12px}#modeChoices button.active{background:#fff;color:#000}.mode-tools{display:flex;gap:8px;flex-wrap:wrap}#layoutHelp{font-size:12px;line-height:1.6;color:#bbb}.layout-edit [data-layout-key]{outline:1px dashed #fff!important;cursor:move;touch-action:none}.layout-edit #message{display:none}
+@media(orientation:portrait){.moba-utilities{bottom:calc(var(--control-bottom) + 128px)}.joystick{left:calc(var(--control-left) + 18px)}.skills{right:calc(var(--control-right) + 12px)}}
+
+/* HUD editing temporarily makes the otherwise non-interactive status strip draggable. */
+.layout-edit .game-top{pointer-events:auto}

@@ -2,10 +2,16 @@ name: Build unsigned iOS IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish after screenshot review
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
       - 'TouchTest*.swift'
+      - 'Native*.swift'
       - 'project.pbxproj'
       - 'TouchTestApp.xcscheme'
       - 'docs/**'
@@ -27,7 +33,7 @@ jobs:
       - name: Restore Xcode project layout
         run: |
           mkdir -p TouchTestApp TouchTestApp.xcodeproj/xcshareddata/xcschemes
-          mv TouchTestApp.swift TouchTestView.swift TouchTestApp/
+          mv TouchTestApp.swift TouchTestView.swift Native*.swift TouchTestApp/
           cp -R docs TouchTestApp/Web
           mv project.pbxproj TouchTestApp.xcodeproj/
           mv TouchTestApp.xcscheme TouchTestApp.xcodeproj/xcshareddata/xcschemes/
@@ -89,6 +95,7 @@ jobs:
           if-no-files-found: warn
 
   publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     needs: [build, smoke]
     runs-on: ubuntu-latest
     steps:
@@ -101,9 +108,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          newer=$(gh api repos/${{ github.repository }}/compare/${{ github.sha }}...main --jq '[.files[].filename | select(test("^(TouchTest|project|docs/|scripts/|\\.github/workflows/build-ios)"))] | length')
+          newer=$(gh api repos/${{ github.repository }}/compare/${{ github.sha }}...main --jq '[.files[].filename | select(test("^(TouchTest|Native|project|docs/|scripts/|\\.github/workflows/build-ios)"))] | length')
           test "$newer" = 0
           gh release view test-latest --repo ${{ github.repository }} >/dev/null 2>&1 || \
             gh release create test-latest --repo ${{ github.repository }} --title "Latest test build" --notes "Unsigned test IPA."
           gh release upload test-latest --repo ${{ github.repository }} TouchTestApp-unsigned.ipa TouchTestApp-unsigned.ipa.sha256 --clobber
-          gh release edit test-latest --repo ${{ github.repository }} --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. Native UITouch diagnostics plus all 21 offline scenarios. Version 3.0, build ${{ github.run_number }}, commit ${{ github.sha }}. Three simulator categories passed portrait/landscape safe-frame checks. Physical-device and reference-image acceptance is still required."
+          gh release edit test-latest --repo ${{ github.repository }} --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. UIKit native test suite with edge-to-edge canvas and movable game controls. Version 4.0, build ${{ github.run_number }}, commit ${{ github.sha }}. Three simulator categories passed native fullscreen/orientation checks. Physical-device and reference-image acceptance is still required."
