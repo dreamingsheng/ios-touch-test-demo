@@ -424,10 +424,10 @@ private final class NativeVideoView: UIView, NativeSceneLifecycle {
         let down = UISwipeGestureRecognizer(target: self, action: #selector(swiped(_:))); down.direction = .down
         addGestureRecognizer(up); addGestureRecognizer(down)
 
-        if let folder, let contents = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+        if let folder=assetFolder, let contents = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
             urls = contents.filter { ["mp4", "mov", "m4v"].contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         }
-        if urls.isEmpty, let folder {
+        if urls.isEmpty, let folder=assetFolder {
             let fallback = folder.appendingPathComponent("flower-cc0.mp4")
             if FileManager.default.fileExists(atPath: fallback.path) { urls = [fallback] }
         }
