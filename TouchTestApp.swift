@@ -27,6 +27,7 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
     var onClose: (() -> Void)?
     private var webView: WKWebView!
     private var lastInsets: UIEdgeInsets?
+    private var lastViewSize: CGSize?
     private var smokeTimer: Timer?
     private var lastSmokeSequence = ""
     override var prefersStatusBarHidden: Bool { true }
@@ -92,12 +93,21 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
     }
     override func viewSafeAreaInsetsDidChange() { super.viewSafeAreaInsetsDidChange(); syncSafeInsets() }
     override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); syncSafeInsets() }
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self else { return }
+            self.lastInsets = nil
+            self.syncSafeInsets()
+        }
+    }
     private func syncSafeInsets() {
         guard isViewLoaded, webView != nil else { return }
         let windowInsets = view.window?.safeAreaInsets ?? .zero
         let local = view.safeAreaInsets
         let inset = UIEdgeInsets(top: max(local.top, windowInsets.top), left: max(local.left, windowInsets.left), bottom: max(local.bottom, windowInsets.bottom), right: max(local.right, windowInsets.right))
-        guard lastInsets != inset else { return }; lastInsets = inset
+        guard lastInsets != inset || lastViewSize != view.bounds.size else { return }
+        lastInsets = inset; lastViewSize = view.bounds.size
         let script = """
         if(document.documentElement){
           const root=document.documentElement.style;
@@ -106,6 +116,7 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
           root.setProperty('--native-safe-bottom','\(inset.bottom)px');
           root.setProperty('--native-safe-left','\(inset.left)px');
           window.dispatchEvent(new Event('resize'));
+          requestAnimationFrame(()=>window.dispatchEvent(new Event('resize')));
         }
         """
         webView.evaluateJavaScript(script, completionHandler: nil)
@@ -128,10 +139,10 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
         }
         let script = "document.querySelector('[data-mode=\"\(mode)\"]')?.click()"
         webView.evaluateJavaScript(script) { [weak self] _, _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.writeLayoutEvidence(sequence) }
+            self?.writeLayoutEvidence(sequence, expectedLandscape: command["orientation"] == "landscape")
         }
     }
-    private func writeLayoutEvidence(_ sequence: String = "initial") {
+    private func writeLayoutEvidence(_ sequence: String = "initial", expectedLandscape: Bool? = nil, attempt: Int = 0, stableCount: Int = 0) {
         let script = """
         (()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {top:r.top,left:r.left,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
         return {viewport:{width:innerWidth,height:innerHeight},app:rect('#app'),body:rect('body'),header:rect('header'),nav:rect('#nav'),stage:rect('#stage'),modeCount:document.querySelectorAll('[data-mode]').length,title:document.querySelector('h1').textContent,mode:document.querySelector('#modeName').textContent,activeMode:document.querySelector('nav button.active').dataset.mode};})()
@@ -142,11 +153,34 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
             data["viewWidth"] = self.view.bounds.width; data["viewHeight"] = self.view.bounds.height
             data["orientation"] = self.view.window?.windowScene?.interfaceOrientation.rawValue ?? 0
             data["requestSequence"] = sequence
+            let viewport = data["viewport"] as? [String: NSNumber]
+            let app = data["app"] as? [String: NSNumber]
+            let body = data["body"] as? [String: NSNumber]
+            let width = viewport?["width"]?.doubleValue ?? 0
+            let height = viewport?["height"]?.doubleValue ?? 0
+            let orientation = self.view.window?.windowScene?.interfaceOrientation
+            let aligned = width > 0 && height > 0 &&
+                abs(width - Double(self.view.bounds.width)) < 1 &&
+                abs(height - Double(self.view.bounds.height)) < 1 &&
+                abs((app?["width"]?.doubleValue ?? 0) - width) < 1 &&
+                abs((app?["height"]?.doubleValue ?? 0) - height) < 1 &&
+                abs((body?["width"]?.doubleValue ?? 0) - width) < 1 &&
+                (expectedLandscape == nil || ((width > height) == expectedLandscape && orientation?.isLandscape == expectedLandscape))
+            data["layoutStable"] = aligned && stableCount >= 1
+            data["settleAttempts"] = attempt
             let inset = self.lastInsets ?? .zero
             data["safeInsets"] = ["top": inset.top, "right": inset.right, "bottom": inset.bottom, "left": inset.left]
             if let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
                let encoded = try? JSONSerialization.data(withJSONObject: data, options: .prettyPrinted) {
                 try? encoded.write(to: folder.appendingPathComponent("layout-evidence.json"), options: .atomic)
+            }
+            // Rotation and WebKit viewport updates complete asynchronously. Keep observing
+            // the same command and require two aligned snapshots; never acknowledge a
+            // portrait or stale viewport as a finished landscape test.
+            if expectedLandscape != nil && attempt < 60 && !(aligned && stableCount >= 1) && self.lastSmokeSequence == sequence {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.writeLayoutEvidence(sequence, expectedLandscape: expectedLandscape, attempt: attempt + 1, stableCount: aligned ? stableCount + 1 : 0)
+                }
             }
         }
     }

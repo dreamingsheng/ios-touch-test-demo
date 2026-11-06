@@ -63,15 +63,20 @@ for device in selected:
                 sequence = ('landscape' if landscape else 'portrait')+'-'+mode
                 (documents / 'smoke-command.json').write_text(json.dumps({'sequence': sequence, 'mode': mode, 'orientation': 'landscape' if landscape else 'portrait'}))
                 layout = None
-                for attempt in range(60):
+                last_observed = None
+                for attempt in range(90):
                     try:
                         observed = json.loads(layout_file.read_text())
                         if observed.get('requestSequence') == sequence:
-                            layout = observed
-                            break
+                            last_observed = observed
+                            if observed.get('layoutStable'):
+                                layout = observed
+                                break
                     except (OSError, ValueError): pass
                     time.sleep(.5)
-                assert layout is not None, f'No evidence for {sequence}'
+                if last_observed:
+                    (output / f'{name}-{sequence}.json').write_text(json.dumps(last_observed, indent=2))
+                assert layout is not None, f'No stable evidence for {sequence}: {last_observed}'
                 assert layout['activeMode'] == mode and layout['modeCount'] == 21 and expected_version in layout['title'], layout
                 viewport = layout['viewport']
                 assert (viewport['width'] > viewport['height']) == landscape, layout
