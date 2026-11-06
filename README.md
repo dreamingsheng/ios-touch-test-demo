@@ -25,8 +25,17 @@ PWA 版目前包含 21 类独立场景：原始多点轨迹、自由绘画、引
 - [W3C Pointer Events](https://www.w3.org/TR/pointerevents3/)：触点身份、压力、接触面积及合并事件
 - [Google Android CTS Verifier](https://android.googlesource.com/platform/cts/+/master/apps/CtsVerifier/)：手工硬件验证与多点触控可视化
 - [Web Platform Tests: Pointer Events](https://wpt.fyi/pointerevents/)：浏览器 Pointer Events 一致性测试
+- [GitHub web-platform-tests/wpt](https://github.com/web-platform-tests/wpt/tree/master/pointerevents)：事件取消、捕获和多指交互的测试用例参考
 
 顶部使用 iOS 透明状态栏，背景可以延伸到刘海/灵动岛区域，但标题、按钮和测试内容始终保留在安全区内。网页不能读取或拦截 iPhone 的硬件音量键，因此沉浸模式通过页面按钮切换。
+
+## 结果解释与验证
+
+这是一套人工交互筛查工具，不是工厂硬件认证。轨迹是操作系统和浏览器交付的坐标，不能等同于触控 IC 原始报点；`getCoalescedEvents()` 不可用时使用普通移动事件。浏览器可能为不支持压力的设备返回固定值（如 0.5），接触宽高也可能是默认值。事件/秒、采样/秒包含网页事件，不能据此判断硬件报点率或端到端触控延迟。
+
+鬼点模式只记录前台测试区内的输入；系统手势、安全区和网页外区域不在测量范围内。20 秒没有事件仅代表这段观察期未发现输入，不证明设备完全没有鬼点。切到后台会使本次监测失效。自动跟随误差包含使用者反应，点击靶心偏差也包含落指误差，不应直接当作硬件精度。
+
+已加入可重跑的[浏览器回归测试](tests/browser-regression.cjs)：准星实际位移、静止长按计时、取消手势、双指松开、多级菜单状态、合并事件中间轨迹，以及 390×844、844×390、320×568 三种视口中的全部 21 个模式。运行方式及 iPhone 人工验收见 [TESTING.md](TESTING.md)。浏览器模拟通过不等于真机已验收。
 
 ## 免费构建
 

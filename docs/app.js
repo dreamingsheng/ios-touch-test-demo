@@ -44,6 +44,7 @@
   }
   function resize(){
     const r = stage.getBoundingClientRect(), p = Math.min(devicePixelRatio || 1, 3);
+    if(canvas.width===Math.max(1,Math.round(r.width*p))&&canvas.height===Math.max(1,Math.round(r.height*p)))return;
     for(const c of [canvas, overlay]){c.width=Math.max(1,Math.round(r.width*p));c.height=Math.max(1,Math.round(r.height*p));c.style.width=r.width+'px';c.style.height=r.height+'px'}
     ctx.setTransform(p,0,0,p,0,0);octx.setTransform(p,0,0,p,0,0);
     if(mode==='line') drawGuides();
@@ -59,8 +60,6 @@
     let samples=[];
     try{samples=typeof e.getCoalescedEvents==='function'?e.getCoalescedEvents():[]}catch(_){samples=[]}
     if(!samples.length)return[e];
-    const last=samples[samples.length-1];
-    if(last.clientX!==e.clientX||last.clientY!==e.clientY||last.timeStamp!==e.timeStamp)samples=[...samples,e];
     return samples;
   }
   function setStats(labels, values=['0','0','0','—']){for(let i=0;i<4;i++){ $(`#l${i}`).textContent=labels[i]; $(`#v${i}`).textContent=values[i] }}
@@ -74,7 +73,7 @@
   function updateTouchStats(){if(['multi','draw','line'].includes(mode)){val(0,active.size);val(1,maxTouches)}}
 
   function pointerDown(e){
-    if((mode==='ui'||mode==='type') && e.target.closest('.settings-test,.typing-test')) return;
+    if(['ui','menu','type'].includes(mode)) return;
     if(e.target.closest('button,input,textarea,select,label') && !e.target.closest('.fire')) return;
     e.preventDefault(); stage.setPointerCapture?.(e.pointerId);
     const p={...pointFromEvent(e),color:palette[Math.abs(e.pointerId)%palette.length],start:performance.now()};
@@ -91,7 +90,7 @@
   }
   function pointerMove(e){
     if(!active.has(e.pointerId))return;e.preventDefault();
-    let old=active.get(e.pointerId),p=old;
+    const previous=active.get(e.pointerId);let old=previous,p=old;
     for(const sample of movementSamples(e)){
       p=pointFromEvent(sample,old);eventBucket++;
       if(mode==='multi'||mode==='draw'||mode==='line'){drawTrail(old,p,p.color,mode==='draw'?6:4);if(mode==='line')scoreLine(p)}
@@ -103,7 +102,7 @@
     trails.set(e.pointerId,p);
     if(mode==='pinch'||mode==='map') updateGesture();
     if(mode==='moba') gameMove(e.pointerId,p,false);
-    if(mode==='aim') gameMove(e.pointerId,p,true,old);
+    if(mode==='aim') gameMove(e.pointerId,p,true,previous);
     if(mode==='cross') crossMove(e.pointerId,p);
     if(mode==='hold') updateHold(e.pointerId,p);
     if(sceneSwipe?.id===e.pointerId){sceneSwipe.x=p.x;sceneSwipe.y=p.y}
@@ -114,9 +113,10 @@
     if(mode==='hold') endHold(e.pointerId,p);
     if(mode==='moba'||mode==='aim') gameUp(e.pointerId);
     if(mode==='cross') crossUp(e.pointerId);
-    if(sceneSwipe?.id===e.pointerId)finishSceneSwipe();
+    if(sceneSwipe?.id===e.pointerId){if(e.type==='pointercancel'||e.type==='lostpointercapture')sceneSwipe=null;else finishSceneSwipe()}
     active.delete(e.pointerId);trails.delete(e.pointerId);
     if((mode==='pinch'||mode==='map')&&gesture)gesture.last=gestureSnapshot();
+    if(mode==='pinch'||mode==='map')renderGesture();
     updateTouchStats();redrawOverlay();
   }
 
@@ -124,7 +124,7 @@
   function scoreLine(p){const r=stage.getBoundingClientRect(), near=[];if(Math.abs(p.y-r.height/2)<24)near.push(['h',p.x/r.width]);if(Math.abs(p.x-r.width/2)<24)near.push(['v',p.y/r.height]);const expected=r.height*.18+(p.x/r.width)*r.height*.64;if(Math.abs(p.y-expected)<24)near.push(['d',p.x/r.width]);for(const [g,t] of near)lineHit.add(`${g}:${Math.max(0,Math.min(49,Math.floor(t*50)))}`);val(3,Math.round(lineHit.size/150*100)+'%')}
 
   function buildGhost(){ghostCount=0;ghostLeft=20;showPanel('<div class="ghost-card" id="ghostCard"><span>剩余时间</span><strong id="ghostTime">20s</strong><p id="ghostText">请将手机平放并且不要触摸测试区</p></div>');setStats(['意外触点','当前触点','事件/秒','倒计时'],['0','0','0','20s']);modeTimer=setInterval(()=>{ghostLeft--;val(3,ghostLeft+'s');$('#ghostTime').textContent=ghostLeft+'s';if(ghostLeft<=0){clearInterval(modeTimer);modeTimer=null;$('#ghostText').textContent=ghostCount===0?'通过：未发现鬼点':'异常：记录到触控事件';$('#message').textContent=$('#ghostText').textContent}},1000)}
-  function registerGhost(){ghostCount++;val(0,ghostCount);val(1,active.size);$('#ghostCard')?.classList.add('bad');if($('#ghostText'))$('#ghostText').textContent=`检测到第 ${ghostCount} 次意外触控`}
+  function registerGhost(){if(ghostLeft<=0)return;ghostCount++;val(0,ghostCount);val(1,active.size);$('#ghostCard')?.classList.add('bad');if($('#ghostText'))$('#ghostText').textContent=`检测到第 ${ghostCount} 次意外触控`}
 
   function buildAuto(){autoScore={sum:0,count:0};showPanel('<div class="auto-card"><span>跟随靶点移动</span><strong id="autoError">—</strong><p>手指保持按住黄色圆点，系统自动扫描全屏</p></div>',true);setStats(['当前触点','采样数','事件/秒','平均误差'],['0','0','0','—']);$('#target').style.display='block';const token=++animationToken;const loop=()=>{if(token!==animationToken||mode!=='auto')return;const r=stage.getBoundingClientRect(),t=performance.now()/1000,x=r.width*(.5+.38*Math.sin(t*.83)),y=r.height*(.5+.35*Math.sin(t*1.27+1));const el=$('#target');el.style.left=x+'px';el.style.top=y+'px';const first=active.values().next().value;if(first){const d=Math.hypot(first.x-x,first.y-y);autoScore.sum+=d;autoScore.count++;const avg=autoScore.sum/autoScore.count;val(0,active.size);val(1,autoScore.count);val(3,avg.toFixed(1)+'px');$('#autoError').textContent=avg.toFixed(1)+'px'}requestAnimationFrame(loop)};requestAnimationFrame(loop)}
 
@@ -157,7 +157,24 @@
   function gameUp(id){if(id===joystickId){joystickId=null;const k=$('#joyKnob');if(k)k.style.transform='';val(1,'0,0')}if(id===aimId)aimId=null;const el=skillPointers.get(id);if(el)el.classList.remove('active');skillPointers.delete(id);val(0,Math.max(0,active.size-1));if(mode==='moba')val(3,skillPointers.size)}
 
   function buildUI(){const rows=Array.from({length:12},(_,i)=>`<div class="setting-row"><span>测试项目 ${i+1}</span><label class="switch"><input type="checkbox"><i></i></label></div>`).join('');showPanel(`<div class="settings-test"><div class="setting-card"><h3>常用设置操作</h3><div class="setting-row"><span>触控反馈</span><label class="switch"><input type="checkbox" checked><i></i></label></div><div class="setting-row"><span>模式切换</span><div class="segment"><button class="on">标准</button><button>游戏</button><button>护眼</button></div></div><div class="setting-row"><span>灵敏度</span><b id="rangeValue">50</b></div><input id="range" type="range" min="0" max="100" value="50"><div class="setting-row"><span>刷新率</span><select><option>60 Hz</option><option>90 Hz</option><option>120 Hz</option></select></div></div><div class="setting-card"><h3>列表滚动与点击</h3>${rows}</div></div>`);setStats(['切换次数','滑块值','事件/秒','滚动'],['0','50','0','正常']);let n=0;panel.querySelectorAll('.segment button').forEach(b=>b.onclick=()=>{b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');val(0,++n)});panel.querySelectorAll('input[type=checkbox],select').forEach(x=>x.onchange=()=>val(0,++n));$('#range').oninput=e=>{val(1,e.target.value);$('#rangeValue').textContent=e.target.value}}
-  function buildMenu(){const pages={root:['设置',['网络与连接','显示与亮度','声音与触感','辅助功能','隐私与安全','应用与存储']],network:['网络与连接',['Wi‑Fi','蓝牙','蜂窝网络','个人热点']],display:['显示与亮度',['外观','文字大小','自动锁定','抬起唤醒']]};showPanel('<div class="menu-test"><div class="menu-head"><button id="menuBack">‹ 返回</button><b id="menuTitle">设置</b><span></span></div><div id="menuList"></div></div>');setStats(['菜单层级','点击次数','事件/秒','当前页面'],['1','0','0','设置']);let stack=['root'],clicks=0;const render=()=>{const key=stack.at(-1),data=pages[key]||[key,['允许通知','后台刷新','定位权限','清除缓存']],list=$('#menuList');$('#menuTitle').textContent=data[0];$('#menuBack').style.visibility=stack.length>1?'visible':'hidden';list.innerHTML=data[1].map((x,i)=>`<button class="menu-row" data-menu-key="${key==='root'?(i===0?'network':i===1?'display':x):x}"><span><i>${['⌁','◐','♪','◎','◉','▦'][i%6]}</i>${x}</span>${i%3===2?'<label class="switch"><input type="checkbox"><i></i></label>':'<b>›</b>'}</button>`).join('');val(0,stack.length);val(3,data[0])};$('#menuBack').onclick=()=>{if(stack.length>1){stack.pop();render()}};$('#menuList').onclick=e=>{const toggle=e.target.closest('input');if(toggle){val(1,++clicks);return}const row=e.target.closest('.menu-row');if(!row)return;stack.push(row.dataset.menuKey);val(1,++clicks);render()};render()}
+  function buildMenu(){
+    const pages={root:['设置',['网络与连接','显示与亮度','声音与触感','辅助功能','隐私与安全','应用与存储']], '网络与连接':['网络与连接',['Wi‑Fi','蓝牙','蜂窝网络','个人热点']], '显示与亮度':['显示与亮度',['外观','文字大小','自动锁定','抬起唤醒']]};
+    const state=new Map();let stack=['root'],clicks=0;
+    showPanel('<div class="menu-test"><div class="menu-head"><button id="menuBack">‹ 返回</button><b id="menuTitle">设置</b><span></span></div><div id="menuList"></div></div>');
+    setStats(['菜单层级','操作次数','事件/秒','当前页面'],['1','0','0','设置']);
+    const render=()=>{
+      const key=stack.at(-1),data=pages[key]||[key,null],list=$('#menuList');
+      $('#menuTitle').textContent=data[0];$('#menuBack').style.visibility=stack.length>1?'visible':'hidden';
+      list.innerHTML=data[1]?data[1].map((x,i)=>`<button class="menu-row" data-menu-key="${x}"><span><i>${['⌁','◐','♪','◎','◉','▦'][i%6]}</i>${x}</span><b>›</b></button>`).join(''):
+        Array.from({length:14},(_,i)=>{const id=key+':'+i;return `<div class="menu-row"><span>选项 ${i+1}</span><label class="switch"><input type="checkbox" aria-label="选项 ${i+1}" data-option="${id}" ${state.get(id)?'checked':''}><i></i></label></div>`}).join('')+'<div class="menu-row"><label for="menuRange">灵敏度</label><input id="menuRange" type="range" min="0" max="100" value="'+(state.get(key+':range')??50)+'"></div>';
+      val(0,stack.length);val(3,data[0]);$('.menu-test').scrollTop=0;
+    };
+    $('#menuBack').onclick=()=>{if(stack.length>1){stack.pop();val(1,++clicks);render()}};
+    $('#menuList').onclick=e=>{const row=e.target.closest('button[data-menu-key]');if(row){stack.push(row.dataset.menuKey);val(1,++clicks);render()}};
+    $('#menuList').onchange=e=>{if(e.target.matches('input[type=checkbox]')){state.set(e.target.dataset.option,e.target.checked);val(1,++clicks)}};
+    $('#menuList').oninput=e=>{if(e.target.id==='menuRange'){state.set(stack.at(-1)+':range',e.target.value);val(1,++clicks)}};
+    render();
+  }
   function buildTyping(){showPanel('<div class="typing-test"><div class="setting-card"><h3>键盘与输入测试</h3><p>测试中英文切换、连续输入、删除、空格、回车和长按选词。</p><textarea id="typingBox" autocomplete="off" autocorrect="on" spellcheck="false" placeholder="点击这里开始打字…"></textarea><p class="key-info" id="keyInfo">等待输入</p></div></div>');setStats(['字符数','输入事件','事件/秒','最后输入'],['0','0','0','—']);let events=0;$('#typingBox').addEventListener('input',e=>{events++;val(0,[...e.target.value].length);val(1,events);const last=[...e.target.value].slice(-1)[0]||'删除';val(3,last);$('#keyInfo').textContent=`内容：${e.target.value||'（空）'}`})}
 
   function buildCross(){showPanel('<div class="cross-test"><div class="big-cross" id="bigCross"><div class="axis-dot" id="axisDot"></div></div><div class="cursor-area"><div class="cursor-dot" id="cursorDot"></div></div></div>');crossIds={axis:null,cursor:null};setStats(['触点','左轴 X/Y','事件/秒','右光标'],['0','0,0','0','50%,50%'])}
@@ -168,16 +185,16 @@
   function newTarget(){const r=stage.getBoundingClientRect(),m=55,t=$('#target');t.style.left=m+Math.random()*Math.max(1,r.width-m*2)+'px';t.style.top=m+Math.random()*Math.max(1,r.height-m*2)+'px';t.style.display='block'}
   function scoreTap(p){const t=$('#target'),x=parseFloat(t.style.left),y=parseFloat(t.style.top),d=Math.hypot(p.x-x,p.y-y);tapTotal++;if(d<=32)tapHits++;val(0,tapTotal);val(1,tapHits);val(3,d.toFixed(1)+'px');$('#message').textContent=`本次偏差 ${d.toFixed(1)} px · 命中 ${tapHits}/${tapTotal}`;newTarget()}
   function placeHold(){const r=stage.getBoundingClientRect(),m=$('#holdMark');m.style.left=r.width/2+'px';m.style.top=r.height/2+'px'}
-  function startHold(id,p){const m=$('#holdMark'),x=parseFloat(m.style.left),y=parseFloat(m.style.top);if(Math.hypot(p.x-x,p.y-y)>48)return;hold={id,x:p.x,y:p.y,start:performance.now(),max:0};$('#message').textContent='保持手指不动…'}
+  function startHold(id,p){const m=$('#holdMark'),x=parseFloat(m.style.left),y=parseFloat(m.style.top);if(hold||Math.hypot(p.x-x,p.y-y)>48)return;hold={id,x:p.x,y:p.y,start:performance.now(),max:0};$('#message').textContent='保持手指不动…';modeTimer=setInterval(()=>{if(hold)updateHold(hold.id,active.get(hold.id)||hold)},100)}
   function updateHold(id,p){if(!hold||hold.id!==id)return;hold.max=Math.max(hold.max,Math.hypot(p.x-hold.x,p.y-hold.y));const sec=(performance.now()-hold.start)/1000;val(0,sec.toFixed(1)+'s');val(1,hold.max.toFixed(1)+'px');val(3,active.size);$('#message').textContent=`持续 ${sec.toFixed(1)} 秒 · 最大漂移 ${hold.max.toFixed(1)} px`}
-  function endHold(id){if(hold?.id===id)hold=null}
+  function endHold(id){if(hold?.id===id){clearInterval(modeTimer);modeTimer=null;hold=null}}
 
   const solidColors=['#000','#fff','#f00','#0f0','#00f','#808080'];let colorIndex=0;
   function showColor(kind){showPanel(kind==='bars'?'<div class="color-bars">'+['#fff','#ff0','#0ff','#0f0','#f0f','#f00','#00f'].map(c=>`<i style="background:${c}"></i>`).join('')+'</div>':'<div id="colorPanel"></div>');setStats(['模式','亮度','事件/秒','操作'],[kind==='bars'?'色条':'纯色','—','0','轻点切换']);if(kind!=='bars'){colorIndex=0;paintColor();panel.onclick=e=>{if(e.target.closest('button'))return;colorIndex=(colorIndex+1)%solidColors.length;paintColor()}}}
   function paintColor(){const c=$('#colorPanel');c.style.background=solidColors[colorIndex];c.style.color=colorIndex===1?'#000':'#fff';c.textContent=['黑','白','红','绿','蓝','灰'][colorIndex];val(0,c.textContent)}
 
   function setMode(next){
-    if(modeTimer){clearInterval(modeTimer);modeTimer=null}animationToken++;mode=next;active.clear();trails.clear();maxTouches=0;eventBucket=0;gesture=null;hold=null;joystickId=aimId=null;skillPointers.clear();clearCanvases();hidePanel();$('#target').style.display='none';$('#holdMark').style.display='none';
+    if(modeTimer){clearInterval(modeTimer);modeTimer=null}animationToken++;mode=next;active.clear();trails.clear();maxTouches=0;eventBucket=0;gesture=null;hold=null;sceneSwipe=null;joystickId=aimId=null;skillPointers.clear();clearCanvases();hidePanel();$('#target').style.display='none';$('#holdMark').style.display='none';
     stage.classList.toggle('allow-scroll',['ui','menu','type'].includes(mode));stage.classList.toggle('game-mode',['moba','aim','cross','video'].includes(mode));document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#modeName').textContent=copy[mode][0];$('#message').textContent=copy[mode][1];
     if(mode==='multi')setStats(['当前触点','最大触点','采样/秒','坐标/压力'],['0','0','0','—']);
     else if(mode==='draw')setStats(['当前触点','最大触点','事件/秒','画笔'],['0','0','0','多指']);
@@ -191,7 +208,9 @@
   function reset(){setMode(mode)}
   function toggleImmersive(){const on=document.body.classList.toggle('immersive');$('#fullBtn').textContent=on?'退出':'沉浸';if(on&&!isStandalone&&isIOS)$('#message').textContent='Safari 会保留工具栏：请添加到主屏幕后从桌面打开';else if(on&&document.fullscreenEnabled&&!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});else if(!on&&document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});setTimeout(syncViewport,80)}
 
-  stage.addEventListener('pointerdown',pointerDown,{passive:false});stage.addEventListener('pointermove',pointerMove,{passive:false});stage.addEventListener('pointerup',pointerUp,{passive:false});stage.addEventListener('pointercancel',pointerUp,{passive:false});
+  stage.addEventListener('pointerdown',pointerDown,{passive:false});stage.addEventListener('pointermove',pointerMove,{passive:false});stage.addEventListener('pointerup',pointerUp,{passive:false});stage.addEventListener('pointercancel',pointerUp,{passive:false});stage.addEventListener('lostpointercapture',pointerUp);
+  function cancelActive(){for(const id of [...active.keys()])pointerUp({pointerId:id,type:'pointercancel'})}
+  addEventListener('blur',cancelActive);document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelActive();if(mode==='ghost'&&ghostLeft>0){clearInterval(modeTimer);modeTimer=null;ghostLeft=0;$('#ghostTime').textContent='中断';val(3,'中断');$('#ghostText').textContent='离开前台，结果无效；请重置后重新测试'}}});
   stage.addEventListener('pointerdown',e=>{const p=active.get(e.pointerId);if(!p)return;if(mode==='grid')hitGrid(p);if(mode==='edge')hitEdge(p)},{passive:false});
   $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=reset;$('#fullBtn').onclick=toggleImmersive;
   setInterval(()=>{val(2,eventBucket);eventBucket=0;if(mode==='multi'&&active.size){const p=active.values().next().value;val(3,`${Math.round(p.x)},${Math.round(p.y)} / ${(p.pressure||0).toFixed(2)}`)}},1000);
