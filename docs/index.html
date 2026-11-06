@@ -14,18 +14,18 @@
   <style>
     :root{color-scheme:dark;--bg:#07111f;--card:#102036;--line:#29415f;--text:#f3f7ff;--muted:#9fb0c6;--cyan:#39d7ff;--green:#47e68b;--red:#ff5b69;--yellow:#ffd166}
     *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif}
-    body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+    html,body{margin:0;width:100%;height:100%;min-height:100dvh;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif}
+    body{padding:0;overscroll-behavior:none}
     button{font:inherit;color:inherit}
-    #app{height:100%;display:grid;grid-template-rows:auto 1fr auto}
-    header{padding:10px 12px 8px;background:linear-gradient(180deg,#10233d,#0b1829);border-bottom:1px solid var(--line)}
+    #app{position:fixed;inset:0;width:100%;height:100dvh;display:grid;grid-template-rows:auto 1fr auto}
+    header{padding:calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left));background:linear-gradient(180deg,#10233d,#0b1829);border-bottom:1px solid var(--line)}
     .title{display:flex;align-items:center;justify-content:space-between;gap:12px}.title h1{font-size:19px;margin:0}.title small{color:var(--muted)}
     #stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
     .stat{min-width:0;background:#091524;border:1px solid #203956;border-radius:9px;padding:5px 6px;text-align:center}.stat b{display:block;color:var(--cyan);font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stat span{font-size:10px;color:var(--muted)}
     main{position:relative;min-height:0;overflow:hidden;background:#050c16}
     #surface,#overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
     #surface{z-index:1}#overlay{z-index:2;pointer-events:none}
-    #message{position:absolute;z-index:3;left:50%;top:14px;transform:translateX(-50%);max-width:92%;padding:7px 11px;background:#091524d9;border:1px solid #29415f;border-radius:999px;color:#d8e6f8;font-size:12px;text-align:center;pointer-events:none}
+    #message{position:absolute;z-index:3;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translateX(-50%);max-width:92%;padding:7px 11px;background:#091524d9;border:1px solid #29415f;border-radius:999px;color:#d8e6f8;font-size:12px;text-align:center;pointer-events:none}
     #modePanel{position:absolute;z-index:4;inset:0;display:none;background:#050c16;touch-action:none}
     #modePanel.show{display:block}
     #grid{height:100%;display:grid;grid-template-columns:repeat(12,1fr);grid-template-rows:repeat(24,1fr);gap:1px;background:#18304b;padding:1px}
@@ -34,10 +34,13 @@
     #target{display:none;position:absolute;width:56px;height:56px;border-radius:50%;border:3px solid var(--yellow);box-shadow:0 0 0 10px #ffd16626,0 0 28px #ffd16680;transform:translate(-50%,-50%)}
     #holdMark{display:none;position:absolute;width:72px;height:72px;border-radius:50%;border:3px solid var(--cyan);transform:translate(-50%,-50%)}
     #colorPanel{height:100%;display:grid;place-items:center;font-size:24px;font-weight:700}.color-bars{width:100%;height:100%;display:grid;grid-template-columns:repeat(7,1fr)}
-    nav{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:7px 8px;background:#0b1829;border-top:1px solid var(--line);overflow:auto}
+    nav{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:7px calc(8px + env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));background:#0b1829;border-top:1px solid var(--line);overflow:auto}
     nav button{border:1px solid #29415f;background:#102036;border-radius:9px;padding:8px 3px;font-size:11px;min-height:38px}
     nav button.active{background:#0b6f8d;border-color:var(--cyan);color:white}
-    .actions{position:absolute;z-index:6;right:9px;bottom:9px;display:flex;gap:7px}.actions button{border:1px solid #385572;background:#102036d9;border-radius:999px;padding:7px 11px;font-size:12px}
+    .actions{position:absolute;z-index:6;right:calc(9px + env(safe-area-inset-right));bottom:calc(9px + env(safe-area-inset-bottom));display:flex;gap:7px}.actions button{border:1px solid #385572;background:#102036d9;border-radius:999px;padding:7px 11px;font-size:12px}
+    body.immersive #app{grid-template-rows:1fr}
+    body.immersive header,body.immersive nav{display:none}
+    body.immersive main{grid-row:1;min-height:100dvh}
     @media(min-width:700px){#stats{max-width:650px}nav{grid-template-columns:repeat(8,1fr)}}
   </style>
 </head>
@@ -56,7 +59,7 @@
     <canvas id="surface"></canvas><canvas id="overlay"></canvas>
     <div id="modePanel"></div><div id="target"></div><div id="holdMark"></div>
     <div id="message">用多根手指同时滑动，检查断线、跳点和最大触点数</div>
-    <div class="actions"><button id="clearBtn">清除</button><button id="fullBtn">全屏</button></div>
+    <div class="actions"><button id="clearBtn">清除</button><button id="fullBtn">沉浸</button></div>
   </main>
   <nav id="nav">
     <button data-mode="multi" class="active">多点轨迹</button><button data-mode="grid">坏点网格</button>
@@ -69,6 +72,7 @@
 (() => {
   'use strict';
   const $=s=>document.querySelector(s), stage=$('#stage'), canvas=$('#surface'), overlay=$('#overlay'), panel=$('#modePanel');
+  const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent), isStandalone=matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: fullscreen)').matches||navigator.standalone===true;
   const ctx=canvas.getContext('2d'), octx=overlay.getContext('2d'), active=new Map(), trails=new Map();
   const palette=['#39d7ff','#ff5b69','#47e68b','#ffd166','#b388ff','#ff8f4c','#56c7ff','#ff77b7','#89f06d','#f5ef71'];
   let mode='multi', maxTouches=0, eventBucket=0, rateTimer=0, gridCells=[], edgeSegments=[], tapHits=0, tapTotal=0, hold=null;
@@ -104,8 +108,17 @@
   function setMode(next){mode=next;active.clear();trails.clear();ctx.clearRect(0,0,canvas.width,canvas.height);octx.clearRect(0,0,overlay.width,overlay.height);panel.className='';panel.innerHTML='';panel.onclick=null;$('#target').style.display='none';$('#holdMark').style.display='none';tapHits=tapTotal=0;$('#detail').textContent='—';document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#modeName').textContent=copy[mode][0];$('#message').textContent=copy[mode][1];if(mode==='grid')buildGrid();else if(mode==='edge')buildEdge();else if(mode==='tap')newTarget();else if(mode==='hold')startHold();else if(['black','colors','bars'].includes(mode))showColor(mode)}
   function clear(){maxTouches=0;eventBucket=0;$('#eventRate').textContent=0;setMode(mode);updateStats()}
   stage.addEventListener('pointerdown',pointerDown,{passive:false});stage.addEventListener('pointermove',pointerMove,{passive:false});stage.addEventListener('pointerup',pointerUp,{passive:false});stage.addEventListener('pointercancel',pointerUp,{passive:false});
-  $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=clear;$('#fullBtn').onclick=()=>document.documentElement.requestFullscreen?.().catch(()=>{});
+  function toggleImmersive(){
+    const on=document.body.classList.toggle('immersive');
+    $('#fullBtn').textContent=on?'退出':'沉浸';
+    if(on&&!isStandalone&&isIOS)$('#message').textContent='Safari 会保留浏览器栏：请用“共享 → 添加到主屏幕”，再从桌面打开';
+    else if(on&&document.fullscreenEnabled&&!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});
+    else if(!on&&document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});
+    setTimeout(resize,80);
+  }
+  $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=clear;$('#fullBtn').onclick=toggleImmersive;
   setInterval(()=>{$('#eventRate').textContent=eventBucket;eventBucket=0},1000);window.addEventListener('resize',resize);resize();setMode('multi');
+  if(isIOS&&!isStandalone)$('#message').textContent='要获得全屏测试：共享 → 添加到主屏幕 → 从桌面图标打开';
   if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 })();
 </script>
