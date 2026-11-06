@@ -34,6 +34,7 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
     private var menuDragCenter:CGPoint?
     private var menuPan:UIPanGestureRecognizer!
     private var menuDragTrace=""
+    private var menuAnchorTrace=""
     private var assetFolder: URL? { Bundle.main.url(forResource: "Media", withExtension: nil) }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
@@ -81,9 +82,11 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         showMode(initial, automaticOrientation: false)
         clock = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if let surface = self.scene as? NativeDiagnosticSurface { self.metrics.text = surface.diagnostics }
-            if let game = self.scene as? NativeGameScene { self.metrics.text = game.diagnostics }
-            if ProcessInfo.processInfo.arguments.contains("--ui-testing"), !self.menuDragTrace.isEmpty {self.metrics.text=(self.metrics.text ?? "")+" · 菜单 "+self.menuDragTrace}
+            let base:String
+            if let surface = self.scene as? NativeDiagnosticSurface {base=surface.diagnostics}
+            else if let game = self.scene as? NativeGameScene {base=game.diagnostics}
+            else {base=Self.modes.first(where:{$0.0==self.mode})?.1 ?? self.mode}
+            self.metrics.text=ProcessInfo.processInfo.arguments.contains("--ui-testing") && !self.menuDragTrace.isEmpty ? base+" · 菜单 "+self.menuDragTrace : base
             if ProcessInfo.processInfo.arguments.contains("--smoke-evidence") { self.pollSmoke() }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: UIApplication.willResignActiveNotification, object: nil)
@@ -102,6 +105,7 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         }
         clampMenu()
         metrics.frame = CGRect(x: safe.left+10,y: safe.top+10,width:max(0,view.bounds.width-safe.left-safe.right-95),height:52)
+        updateDiagnosticGeometry()
         view.bringSubviewToFront(metrics); view.bringSubviewToFront(menuButton);view.bringSubviewToFront(clearButton)
     }
     override func viewDidAppear(_ animated: Bool) {
@@ -138,8 +142,8 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         }
         var tools: [UIMenuElement] = [
             UIAction(title: "重置本项", image: UIImage(systemName:"arrow.counterclockwise")) { [weak self] _ in self?.clearCurrentTest() },
-            UIAction(title: metrics.isHidden ? "显示实时数据" : "隐藏实时数据") { [weak self] _ in guard let self else { return }; self.metrics.isHidden.toggle(); self.refreshMenu() },
-            UIAction(title: "隐藏悬浮工具（双指长按恢复）") { [weak self] _ in guard let self else{return};self.metricsWereVisible = !self.metrics.isHidden;self.menuButton.isHidden=true;self.clearButton.isHidden=true;self.metrics.isHidden=true;self.restoreControls.isEnabled=true },
+            UIAction(title: metrics.isHidden ? "显示实时数据" : "隐藏实时数据") { [weak self] _ in guard let self else { return }; self.metrics.isHidden.toggle(); self.updateDiagnosticGeometry(); self.refreshMenu() },
+            UIAction(title: "隐藏悬浮工具（双指长按恢复）") { [weak self] _ in guard let self else{return};self.metricsWereVisible = !self.metrics.isHidden;self.menuButton.isHidden=true;self.clearButton.isHidden=true;self.metrics.isHidden=true;self.restoreControls.isEnabled=true;self.updateDiagnosticGeometry() },
             UIAction(title: "导出原生采样 JSON") { [weak self] _ in self?.exportSamples() },
             UIAction(title: "导出原生采样 CSV") { [weak self] _ in self?.exportSamples(format:"csv") }
         ]
@@ -151,7 +155,9 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         menuButton.menu = UIMenu(title: "Touch Test · 原生测试", children: children)
     }
     @objc private func moveMenu(_ pan: UIPanGestureRecognizer) {
-        if menuTouchStart==nil {let p=pan.location(in:view),d=pan.translation(in:view);menuTouchStart=CGPoint(x:p.x-d.x,y:p.y-d.y);menuDragCenter=menuButton.center}
+        if pan.state == .cancelled || pan.state == .failed {menuTouchStart=nil;menuDragCenter=nil;return}
+        guard pan.state == .began || pan.state == .changed || pan.state == .ended else{return}
+        if menuTouchStart==nil {let p=pan.location(in:view),d=pan.translation(in:view);menuTouchStart=CGPoint(x:p.x-d.x,y:p.y-d.y);menuDragCenter=menuButton.center;menuAnchorTrace="anchor=fallback"}
         guard let start=menuTouchStart,let original=menuDragCenter else{return}
         let point=pan.location(in:view)
         menuButton.center = CGPoint(x:original.x+point.x-start.x,y:original.y+point.y-start.y)
@@ -160,20 +166,24 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
             let key = "native-menu-" + (view.bounds.width > view.bounds.height ? "landscape" : "portrait")
             UserDefaults.standard.set([Double(menuButton.center.x/view.bounds.width),Double(menuButton.center.y/view.bounds.height)],forKey:key)
         }
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing") {menuDragTrace="state=\(pan.state.rawValue) raw=\(start) base=\(original) point=\(point) center=\(menuButton.center)"}
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing") {menuDragTrace="\(menuAnchorTrace) state=\(pan.state.rawValue) raw=\(start) base=\(original) point=\(point) center=\(menuButton.center)"}
         if pan.state == .ended || pan.state == .cancelled || pan.state == .failed {menuTouchStart=nil;menuDragCenter=nil}
     }
     func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldReceive touch:UITouch)->Bool {
-        if gestureRecognizer === menuPan,gestureRecognizer.numberOfTouches==0 {
+        if gestureRecognizer === menuPan {
+            if gestureRecognizer.state == .began || gestureRecognizer.state == .changed {return false}
             // Capture before UIButton's internal menu recognizers delay or
-            // cancel touchDown delivery; every drag receives a fresh anchor.
+            // cancel touchDown delivery; every single-touch drag receives a
+            // fresh anchor, regardless of UIKit's current tracked-touch count.
             menuTouchStart=touch.location(in:view);menuDragCenter=menuButton.center
+            menuAnchorTrace="anchor=delegate count=\(gestureRecognizer.numberOfTouches) state=\(gestureRecognizer.state.rawValue)"
         }
         return true
     }
     @objc private func restoreFloatingControls(_ gesture:UILongPressGestureRecognizer) {
         guard gesture.state == .began else{return}
         menuButton.isHidden=false;clearButton.isHidden=false;metrics.isHidden = !metricsWereVisible
+        updateDiagnosticGeometry()
         gesture.isEnabled=false
     }
     func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldRecognizeSimultaneouslyWith otherGestureRecognizer:UIGestureRecognizer)->Bool {gestureRecognizer === restoreControls || otherGestureRecognizer === restoreControls}
@@ -184,6 +194,16 @@ final class NativeSuiteController: UIViewController, UIGestureRecognizerDelegate
         let below=menuButton.frame.maxY+6
         let y=below+32<=view.bounds.height-inset.bottom ? below : menuButton.frame.minY-38
         clearButton.frame=CGRect(x:menuButton.frame.minX,y:y,width:64,height:32)
+        updateDiagnosticGeometry()
+    }
+    private func updateDiagnosticGeometry() {
+        guard let surface=scene as? NativeDiagnosticSurface else{return}
+        let controls:[UIView]=[metrics,menuButton,clearButton]
+        let exclusions=controls.compactMap { control -> CGRect? in
+            guard !control.isHidden,control.alpha>0.01,control.bounds.width>0,control.bounds.height>0 else{return nil}
+            return control.convert(control.bounds,to:surface)
+        }
+        surface.updateTargetGeometry(safeInsets:view.safeAreaInsets,exclusionRects:exclusions)
     }
     @objc private func clearCurrentTest() {
         if let resettable=scene as? NativeResettableScene {resettable.resetScene()}
@@ -267,7 +287,10 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
     private var cursorPoint=CGPoint.zero
     private var sampleRows:[[String:Any]]=[]
     private var total=0, maximum=0, ghost=0, taps=0, hits=0
+    private var tapLastError:CGFloat=0,tapErrorSum:CGFloat=0,tapMaxError:CGFloat=0
     private var covered=Set<Int>(),edges=Set<Int>(),lineCovered=Set<Int>()
+    private var layoutResetCount=0
+    private var lastLayoutChange:(from:CGSize,to:CGSize)?
     private var started=ProcessInfo.processInfo.systemUptime
     private var ghostValid=true
     private var ghostFinished=false
@@ -276,6 +299,11 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
     private var solid=0
     private var follows=0, errorSum:CGFloat=0
     private var eventCount=0,rate=0,lastRate=ProcessInfo.processInfo.systemUptime
+    private var targetSafeInsets=UIEdgeInsets.zero
+    private var targetExclusionRects:[CGRect]=[]
+    private var geometryValidation="geometry-only 0/0"
+    private let targetRadius:CGFloat=28,targetMargin:CGFloat=8
+    private let uiTesting=ProcessInfo.processInfo.arguments.contains("--ui-testing")
     private let colors:[UIColor]=[.systemCyan,.systemYellow,.systemGreen,.systemOrange,.systemPink,.systemPurple,.systemBlue,.systemRed]
     init(mode:String) {
         self.mode=mode;super.init(frame:.zero)
@@ -289,16 +317,39 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
         self.timer=timer;RunLoop.main.add(timer,forMode:.common)
     }
     required init?(coder:NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func layoutSubviews() { super.layoutSubviews();if canvasSize != bounds.size {canvasSize=bounds.size;trailImage=nil;livePaths.removeAll();livePointCount=0}; if target == .zero || !bounds.contains(target) { target=CGPoint(x:bounds.midX,y:bounds.midY) };if cursorPoint == .zero {cursorPoint=CGPoint(x:bounds.width*0.75,y:bounds.midY)}; setNeedsDisplay() }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let newSize=bounds.size,oldSize=canvasSize
+        if newSize != oldSize {
+            if oldSize != .zero {
+                layoutResetCount += 1;lastLayoutChange=(oldSize,newSize)
+                if mode=="grid" {covered.removeAll()}
+                if mode=="edge" {edges.removeAll()}
+                if mode=="line" {lineCovered.removeAll()}
+                if oldSize.width>0,oldSize.height>0,cursorPoint != .zero {
+                    cursorPoint=CGPoint(x:cursorPoint.x/oldSize.width*newSize.width,y:cursorPoint.y/oldSize.height*newSize.height)
+                }
+                active.removeAll();radii.removeAll();identities.removeAll();axisTouch=nil;cursorTouch=nil
+                holdID=nil;holdStart=0;holdDrift=0
+                if mode=="tap" {target = .zero}
+            }
+            canvasSize=newSize;trailImage=nil;livePaths.removeAll();livePointCount=0
+        }
+        if cursorPoint == .zero {cursorPoint=CGPoint(x:bounds.width*0.75,y:bounds.midY)}
+        clampCursorPoint()
+        if mode=="tap",(target == .zero || !isReachableTarget(target)) {target=generateReachableTarget()}
+        else if target == .zero || !bounds.contains(target) {target=CGPoint(x:bounds.midX,y:bounds.midY)}
+        updateGeometryValidation();updateTestingAccessibility();setNeedsDisplay()
+    }
     var diagnostics:String {
         let elapsed=ProcessInfo.processInfo.systemUptime-started
         switch mode {
         case "ghost": return ghostValid ? "鬼点 \(ghost) · 剩余 \(max(0,20-Int(elapsed))) 秒\n仅记录实际触控，未输入不能证明硬件合格" : "测试中断，结果无效；请重置"
-        case "grid": return "覆盖 \(covered.count)/288 · \(rate) 采样/秒"
-        case "edge": return "四边 \(edges.count)/80 · \(rate) 采样/秒"
-        case "line": return "引导覆盖 \(lineCovered.count)/150 · \(rate) 采样/秒"
+        case "grid": return "覆盖 \(covered.count)/288 · \(rate) 采样/秒\(layoutResetCount>0 ? " · 布局重置 \(layoutResetCount)" : "")"
+        case "edge": return "四边 \(edges.count)/80 · \(rate) 采样/秒\(layoutResetCount>0 ? " · 布局重置 \(layoutResetCount)" : "")"
+        case "line": return "引导覆盖 \(lineCovered.count)/150 · \(rate) 采样/秒\(layoutResetCount>0 ? " · 布局重置 \(layoutResetCount)" : "")"
         case "hold": return "长按 \(String(format:"%.1f",holdID == nil ? holdStart : ProcessInfo.processInfo.systemUptime-holdStart))s · 最大漂移 \(String(format:"%.1f",Double(holdDrift)))pt"
-        case "tap": return "点击 \(taps) · 命中 \(hits)"
+        case "tap": return taps==0 ? "点击 0 · 命中 0 · 本次/平均/最大 —" : "点击 \(taps) · 命中 \(hits) · 本次 \(String(format:"%.1f",Double(tapLastError)))pt · 平均 \(String(format:"%.1f",Double(tapErrorSum/CGFloat(taps))))pt · 最大 \(String(format:"%.1f",Double(tapMaxError)))pt"
         case "auto": return "跟随 \(follows) 帧 · 平均误差 \(follows == 0 ? "—" : String(format:"%.1f",Double(errorSum/CGFloat(follows))))pt"
         default:return "触点 \(active.count) · 最大 \(maximum) · \(rate) 采样/秒\n保留 \(sampleRows.count)/\(total) 条 UITouch 采样"
         }
@@ -308,6 +359,7 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
         if mode=="ghost" && now-started>=20 && !ghostFinished {ghostFinished=true;active.removeAll();identities.removeAll();timer?.invalidate();timer=nil}
         if now-lastRate>=1 { rate=eventCount;eventCount=0;lastRate=now }
         if mode=="auto" { target=CGPoint(x:bounds.width*(0.5+0.38*sin((now-started)*0.83)),y:bounds.height*(0.5+0.35*sin((now-started)*1.27)));if let p=active.sorted(by:{$0.key<$1.key}).first?.value { errorSum += hypot(p.x-target.x,p.y-target.y);follows += 1 } }
+        updateTestingAccessibility()
         if ["auto","ghost","hold"].contains(mode) { setNeedsDisplay() }
     }
     override func touchesBegan(_ touches:Set<UITouch>,with event:UIEvent?) { process(touches,event:event,phase:"down") }
@@ -325,7 +377,10 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
                 if mode=="cross" {if p.x<bounds.midX && axisTouch==nil {axisTouch=id};if p.x>=bounds.midX && cursorTouch==nil {cursorTouch=id}}
                 if mode=="ghost" && ghostValid && ProcessInfo.processInfo.systemUptime-started<20 { ghost += 1 }
                 if mode=="colors" { solid=(solid+1)%6 }
-                if mode=="tap" { taps += 1;if hypot(p.x-target.x,p.y-target.y)<=28 { hits += 1 };randomTarget() }
+                if mode=="tap" {
+                    tapLastError=hypot(p.x-target.x,p.y-target.y);tapErrorSum += tapLastError;tapMaxError=max(tapMaxError,tapLastError)
+                    taps += 1;if tapLastError<=targetRadius {hits += 1};randomTarget()
+                }
                 if mode=="hold" && holdID==nil && hypot(p.x-bounds.midX,p.y-bounds.midY)<=48 { holdID=id;holdStart=ProcessInfo.processInfo.systemUptime;holdOrigin=p;holdDrift=0 }
             }
             let delivered=phase=="move" ? (event?.coalescedTouches(for:touch) ?? [touch]) : [touch]
@@ -343,12 +398,12 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
                 if mode=="edge" { markEdges(point) }
                 if mode=="line" { markLine(point) }
                 if id==holdID { holdDrift=max(holdDrift,hypot(point.x-holdOrigin.x,point.y-holdOrigin.y)) }
-                if id==cursorTouch {cursorPoint=CGPoint(x:min(bounds.width,max(bounds.midX,point.x)),y:min(bounds.height,max(0,point.y)))}
+                if id==cursorTouch {cursorPoint=point;clampCursorPoint()}
             }
             if phase=="up" || phase=="cancel" { active[id]=nil;radii[id]=nil;identities[key]=nil;if axisTouch==id {axisTouch=nil};if cursorTouch==id {cursorTouch=nil};if holdID==id { holdStart=ProcessInfo.processInfo.systemUptime-holdStart;holdID=nil } }
             else { active[id]=p;radii[id]=touch.majorRadius }
         }
-        setNeedsDisplay()
+        updateTestingAccessibility();setNeedsDisplay()
     }
     private func strokeTrails() {
         for (id,path) in livePaths {colors[(id-1)%colors.count].setStroke();path.lineWidth=mode=="draw" ? 5 : 2;path.lineCapStyle = .round;path.lineJoinStyle = .round;path.stroke()}
@@ -362,7 +417,75 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
         // straight segment between unrelated fingers or across cancelled input.
         for (id,p) in active {let path=UIBezierPath();path.move(to:p);livePaths[id]=path}
     }
-    private func randomTarget() { target=CGPoint(x:CGFloat.random(in:45...max(45,bounds.width-45)),y:CGFloat.random(in:60...max(60,bounds.height-45))) }
+    func updateTargetGeometry(safeInsets:UIEdgeInsets,exclusionRects:[CGRect]) {
+        targetSafeInsets=safeInsets
+        targetExclusionRects=exclusionRects.filter{$0.width>0 && $0.height>0}.map{$0.intersection(bounds)}.filter{!$0.isNull && !$0.isEmpty}
+        if mode=="tap" && (target == .zero || !isReachableTarget(target)) {target=generateReachableTarget()}
+        updateGeometryValidation();updateTestingAccessibility();setNeedsDisplay()
+    }
+    private var targetCenterRect:CGRect {
+        let inset=targetRadius+targetMargin
+        let minX=bounds.minX+targetSafeInsets.left+inset,maxX=bounds.maxX-targetSafeInsets.right-inset
+        let minY=bounds.minY+targetSafeInsets.top+inset,maxY=bounds.maxY-targetSafeInsets.bottom-inset
+        guard maxX>minX,maxY>minY else{return .zero}
+        return CGRect(x:minX,y:minY,width:maxX-minX,height:maxY-minY)
+    }
+    private func isReachableTarget(_ point:CGPoint)->Bool {
+        let rect=targetCenterRect
+        guard rect.width>0,rect.height>0,rect.contains(point) else{return false}
+        let circle=CGRect(x:point.x-targetRadius-targetMargin,y:point.y-targetRadius-targetMargin,width:(targetRadius+targetMargin)*2,height:(targetRadius+targetMargin)*2)
+        return !targetExclusionRects.contains{circle.intersects($0)}
+    }
+    private func generateReachableTarget()->CGPoint {
+        let rect=targetCenterRect
+        guard rect.width>0,rect.height>0 else{return CGPoint(x:bounds.midX,y:bounds.midY)}
+        for _ in 0..<64 {
+            let candidate=CGPoint(x:CGFloat.random(in:rect.minX...rect.maxX),y:CGFloat.random(in:rect.minY...rect.maxY))
+            if isReachableTarget(candidate) {return candidate}
+        }
+        // A deterministic scan guarantees a stable answer in crowded layouts.
+        for row in 0..<19 {for column in 0..<13 {
+            let candidate=CGPoint(x:rect.minX+rect.width*CGFloat(column)/12,y:rect.minY+rect.height*CGFloat(row)/18)
+            if isReachableTarget(candidate) {return candidate}
+        }}
+        var y=rect.minY
+        while y<=rect.maxY {
+            var x=rect.minX
+            while x<=rect.maxX {let candidate=CGPoint(x:x,y:y);if isReachableTarget(candidate) {return candidate};x += 1}
+            y += 1
+        }
+        return CGPoint(x:rect.midX,y:rect.midY)
+    }
+    private func randomTarget() {target=generateReachableTarget();updateGeometryValidation()}
+    private func updateGeometryValidation() {
+        guard uiTesting,mode=="tap" else{return}
+        var valid=0
+        for _ in 0..<200 {if isReachableTarget(generateReachableTarget()) {valid += 1}}
+        geometryValidation="geometry-only \(valid)/200"
+    }
+    private func clampCursorPoint() {
+        guard bounds.width>0,bounds.height>0 else{return}
+        let radius:CGFloat=14
+        let minX=min(bounds.width-radius,max(bounds.midX+radius,radius))
+        let maxX=max(minX,bounds.width-radius)
+        cursorPoint.x=min(maxX,max(minX,cursorPoint.x))
+        cursorPoint.y=min(max(radius,bounds.height-radius),max(radius,cursorPoint.y))
+    }
+    private func updateTestingAccessibility() {
+        guard uiTesting else{return}
+        var values=["mode=\(mode)","layoutResetCount=\(layoutResetCount)"]
+        if let change=lastLayoutChange {values.append(String(format:"size=%.1fx%.1f->%.1fx%.1f",change.from.width,change.from.height,change.to.width,change.to.height))}
+        switch mode {
+        case "tap":
+            values += [String(format:"target=%.2f,%.2f",target.x,target.y),"targetValid=\(isReachableTarget(target) ? 1 : 0)",geometryValidation,"tapCount=\(taps)","hitCount=\(hits)",String(format:"lastError=%.2f",tapLastError),String(format:"averageError=%.2f",taps==0 ? 0 : tapErrorSum/CGFloat(taps)),String(format:"maxError=%.2f",tapMaxError)]
+        case "grid":values.append("coverage=\(covered.count)/288")
+        case "edge":values.append("coverage=\(edges.count)/80")
+        case "line":values.append("coverage=\(lineCovered.count)/150")
+        case "cross":values.append(String(format:"cursor=%.2f,%.2f",cursorPoint.x,cursorPoint.y))
+        default:break
+        }
+        accessibilityValue=values.joined(separator:";")
+    }
     private func markEdges(_ p:CGPoint) {
         let x=min(19,max(0,Int(p.x/max(1,bounds.width)*20))),y=min(19,max(0,Int(p.y/max(1,bounds.height)*20)))
         if p.y<30 {edges.insert(x)};if p.y>bounds.height-30 {edges.insert(20+x)};if p.x<30 {edges.insert(40+y)};if p.x>bounds.width-30 {edges.insert(60+y)}
@@ -397,8 +520,14 @@ final class NativeDiagnosticSurface: UIView, NativeSceneLifecycle {
         }
     }
     private func centered(_ text:String,in context:CGContext) {let attributes:[NSAttributedString.Key:Any]=[.font:UIFont.systemFont(ofSize:17,weight:.medium),.foregroundColor:UIColor.white];let size=(text as NSString).size(withAttributes:attributes);(text as NSString).draw(at:CGPoint(x:bounds.midX-size.width/2,y:bounds.midY+55),withAttributes:attributes)}
-    func report()->[String:Any] { ["implementation":"UIKit","source":"UITouch","coordinateUnit":"pt in full-window native canvas","timeUnit":"UITouch timestamp in monotonic seconds","mode":mode,"device":UIDevice.current.model,"systemVersion":UIDevice.current.systemVersion,"viewport":["width":bounds.width,"height":bounds.height],"limits":["limit":10000,"retained":sampleRows.count,"totalObserved":total,"dropped":total-sampleRows.count],"metrics":diagnostics,"ghost":["count":ghost,"durationSeconds":20,"status":!ghostValid ? "interrupted" : (ProcessInfo.processInfo.systemUptime-started>=20 ? "completed" : "running")],"verdict":"未人工验收","samples":sampleRows.sorted{($0["timestamp"] as? Double ?? 0)<($1["timestamp"] as? Double ?? 0)}] }
-    func interrupt() {active.removeAll();identities.removeAll();axisTouch=nil;cursorTouch=nil;if mode=="ghost" && ProcessInfo.processInfo.systemUptime-started<20 {ghostValid=false;ghostFinished=true;timer?.invalidate();timer=nil};if holdID != nil {holdStart=ProcessInfo.processInfo.systemUptime-holdStart;holdID=nil};setNeedsDisplay()}
+    func report()->[String:Any] {
+        var result:[String:Any]=["implementation":"UIKit","source":"UITouch","coordinateUnit":"pt in full-window native canvas","timeUnit":"UITouch timestamp in monotonic seconds","mode":mode,"device":UIDevice.current.model,"systemVersion":UIDevice.current.systemVersion,"viewport":["width":bounds.width,"height":bounds.height],"limits":["limit":10000,"retained":sampleRows.count,"totalObserved":total,"dropped":total-sampleRows.count],"metrics":diagnostics,"layout":["resetCount":layoutResetCount],"verdict":"未人工验收","samples":sampleRows.sorted{($0["timestamp"] as? Double ?? 0)<($1["timestamp"] as? Double ?? 0)}]
+        if let change=lastLayoutChange {result["layout"]=["resetCount":layoutResetCount,"from":["width":change.from.width,"height":change.from.height],"to":["width":change.to.width,"height":change.to.height]]}
+        if mode=="tap" {result["tap"]=["count":taps,"hitCount":hits,"hits":hits,"hitRadius":targetRadius,"lastError":tapLastError,"averageError":taps==0 ? 0 : tapErrorSum/CGFloat(taps),"maxError":tapMaxError]}
+        if mode=="ghost" {result["ghost"]=["count":ghost,"durationSeconds":20,"status":!ghostValid ? "interrupted" : (ProcessInfo.processInfo.systemUptime-started>=20 ? "completed" : "running")]}
+        return result
+    }
+    func interrupt() {active.removeAll();identities.removeAll();axisTouch=nil;cursorTouch=nil;if mode=="ghost" && ProcessInfo.processInfo.systemUptime-started<20 {ghostValid=false;ghostFinished=true;timer?.invalidate();timer=nil};if holdID != nil {holdStart=ProcessInfo.processInfo.systemUptime-holdStart;holdID=nil};updateTestingAccessibility();setNeedsDisplay()}
     func stopScene() {timer?.invalidate();timer=nil;interrupt()}
     deinit {timer?.invalidate()}
 }
