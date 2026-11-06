@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-  <meta name="theme-color" content="#07111f">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Touch Test">
@@ -11,117 +11,29 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <style>
-    :root{color-scheme:dark;--bg:#07111f;--card:#102036;--line:#29415f;--text:#f3f7ff;--muted:#9fb0c6;--cyan:#39d7ff;--green:#47e68b;--red:#ff5b69;--yellow:#ffd166}
-    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-    html,body{margin:0;width:100%;height:100%;min-height:100dvh;overflow:hidden;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif}
-    body{padding:0;overscroll-behavior:none}
-    button{font:inherit;color:inherit}
-    #app{position:fixed;inset:0;width:100%;height:100dvh;display:grid;grid-template-rows:auto 1fr auto}
-    header{padding:calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left));background:linear-gradient(180deg,#10233d,#0b1829);border-bottom:1px solid var(--line)}
-    .title{display:flex;align-items:center;justify-content:space-between;gap:12px}.title h1{font-size:19px;margin:0}.title small{color:var(--muted)}
-    #stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
-    .stat{min-width:0;background:#091524;border:1px solid #203956;border-radius:9px;padding:5px 6px;text-align:center}.stat b{display:block;color:var(--cyan);font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stat span{font-size:10px;color:var(--muted)}
-    main{position:relative;min-height:0;overflow:hidden;background:#050c16}
-    #surface,#overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none}
-    #surface{z-index:1}#overlay{z-index:2;pointer-events:none}
-    #message{position:absolute;z-index:3;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translateX(-50%);max-width:92%;padding:7px 11px;background:#091524d9;border:1px solid #29415f;border-radius:999px;color:#d8e6f8;font-size:12px;text-align:center;pointer-events:none}
-    #modePanel{position:absolute;z-index:4;inset:0;display:none;background:#050c16;touch-action:none}
-    #modePanel.show{display:block}
-    #grid{height:100%;display:grid;grid-template-columns:repeat(12,1fr);grid-template-rows:repeat(24,1fr);gap:1px;background:#18304b;padding:1px}
-    .cell{background:#0b1727}.cell.hit{background:var(--green)}
-    #edge{height:100%;position:relative}.edge-seg{position:absolute;background:#172942;border:1px solid #36506f}.edge-seg.hit{background:var(--green)}
-    #target{display:none;position:absolute;width:56px;height:56px;border-radius:50%;border:3px solid var(--yellow);box-shadow:0 0 0 10px #ffd16626,0 0 28px #ffd16680;transform:translate(-50%,-50%)}
-    #holdMark{display:none;position:absolute;width:72px;height:72px;border-radius:50%;border:3px solid var(--cyan);transform:translate(-50%,-50%)}
-    #colorPanel{height:100%;display:grid;place-items:center;font-size:24px;font-weight:700}.color-bars{width:100%;height:100%;display:grid;grid-template-columns:repeat(7,1fr)}
-    nav{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:7px calc(8px + env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));background:#0b1829;border-top:1px solid var(--line);overflow:auto}
-    nav button{border:1px solid #29415f;background:#102036;border-radius:9px;padding:8px 3px;font-size:11px;min-height:38px}
-    nav button.active{background:#0b6f8d;border-color:var(--cyan);color:white}
-    .actions{position:absolute;z-index:6;right:calc(9px + env(safe-area-inset-right));bottom:calc(9px + env(safe-area-inset-bottom));display:flex;gap:7px}.actions button{border:1px solid #385572;background:#102036d9;border-radius:999px;padding:7px 11px;font-size:12px}
-    body.immersive #app{grid-template-rows:1fr}
-    body.immersive header,body.immersive nav{display:none}
-    body.immersive main{grid-row:1;min-height:100dvh}
-    @media(min-width:700px){#stats{max-width:650px}nav{grid-template-columns:repeat(8,1fr)}}
-  </style>
+  <link rel="stylesheet" href="./style.css">
 </head>
 <body>
 <div id="app">
   <header>
     <div class="title"><h1>Touch Test</h1><small id="modeName">多点轨迹</small></div>
     <div id="stats">
-      <div class="stat"><b id="touchCount">0</b><span>当前触点</span></div>
-      <div class="stat"><b id="maxTouches">0</b><span>最大触点</span></div>
-      <div class="stat"><b id="eventRate">0</b><span>事件/秒</span></div>
-      <div class="stat"><b id="detail">—</b><span>测试数据</span></div>
+      <div class="stat"><b id="v0">0</b><span id="l0">当前触点</span></div>
+      <div class="stat"><b id="v1">0</b><span id="l1">最大触点</span></div>
+      <div class="stat"><b id="v2">0</b><span id="l2">事件/秒</span></div>
+      <div class="stat"><b id="v3">—</b><span id="l3">测试数据</span></div>
     </div>
   </header>
   <main id="stage">
     <canvas id="surface"></canvas><canvas id="overlay"></canvas>
     <div id="modePanel"></div><div id="target"></div><div id="holdMark"></div>
-    <div id="message">用多根手指同时滑动，检查断线、跳点和最大触点数</div>
-    <div class="actions"><button id="clearBtn">清除</button><button id="fullBtn">沉浸</button></div>
+    <div id="message">多根手指同时滑动，检查断线、跳点和最大触点数</div>
+    <div class="actions"><button id="clearBtn">重置</button><button id="fullBtn">沉浸</button></div>
   </main>
-  <nav id="nav">
-    <button data-mode="multi" class="active">多点轨迹</button><button data-mode="grid">坏点网格</button>
-    <button data-mode="edge">边缘测试</button><button data-mode="tap">点击精度</button>
-    <button data-mode="hold">长按漂移</button><button data-mode="black">纯黑</button>
-    <button data-mode="colors">色彩</button><button data-mode="bars">色条</button>
+  <nav id="nav" aria-label="测试项目">
+    <button data-mode="multi" class="active">多点</button><button data-mode="draw">画画</button><button data-mode="line">划线</button><button data-mode="ghost">鬼点</button><button data-mode="auto">自动跟随</button><button data-mode="grid">坏点网格</button><button data-mode="edge">边缘</button><button data-mode="pinch">图片缩放</button><button data-mode="map">地图手势</button><button data-mode="read">阅读翻页</button><button data-mode="video">短视频</button><button data-mode="moba">MOBA轮盘</button><button data-mode="aim">射击瞄准</button><button data-mode="ui">控件设置</button><button data-mode="menu">多级菜单</button><button data-mode="type">打字</button><button data-mode="cross">十字轴光标</button><button data-mode="tap">点击精度</button><button data-mode="hold">长按漂移</button><button data-mode="colors">纯色切换</button><button data-mode="bars">标准色条</button>
   </nav>
 </div>
-<script>
-(() => {
-  'use strict';
-  const $=s=>document.querySelector(s), stage=$('#stage'), canvas=$('#surface'), overlay=$('#overlay'), panel=$('#modePanel');
-  const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent), isStandalone=matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: fullscreen)').matches||navigator.standalone===true;
-  const ctx=canvas.getContext('2d'), octx=overlay.getContext('2d'), active=new Map(), trails=new Map();
-  const palette=['#39d7ff','#ff5b69','#47e68b','#ffd166','#b388ff','#ff8f4c','#56c7ff','#ff77b7','#89f06d','#f5ef71'];
-  let mode='multi', maxTouches=0, eventBucket=0, rateTimer=0, gridCells=[], edgeSegments=[], tapHits=0, tapTotal=0, hold=null;
-  const copy={
-    multi:['多点轨迹','用多根手指同时滑动，检查断线、跳点和最大触点数'],
-    grid:['坏点网格','涂满全部网格；未变绿区域可能是触控盲区'], edge:['边缘测试','沿屏幕四边滑动，点亮全部边缘段'],
-    tap:['点击精度','准确点击黄色圆靶，记录中心偏差'], hold:['长按漂移','按住蓝色圆圈不要移动，测量坐标漂移'],
-    black:['纯黑屏','观察坏点、漏光和亮度均匀性'], colors:['纯色切换','点击屏幕依次切换白、红、绿、蓝、灰'], bars:['标准色条','观察颜色、灰阶与显示异常']};
-  const dpr=()=>Math.min(devicePixelRatio||1,3);
-  function resize(){const r=stage.getBoundingClientRect(),p=dpr();for(const c of [canvas,overlay]){c.width=r.width*p;c.height=r.height*p;c.style.width=r.width+'px';c.style.height=r.height+'px'}ctx.setTransform(p,0,0,p,0,0);octx.setTransform(p,0,0,p,0,0); if(mode==='grid')buildGrid(); if(mode==='edge')buildEdge();}
-  function pos(e){const r=stage.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}}
-  function updateStats(){ $('#touchCount').textContent=active.size;$('#maxTouches').textContent=maxTouches; }
-  function drawPoint(p,color){octx.beginPath();octx.arc(p.x,p.y,Math.max(9,p.radius||9),0,Math.PI*2);octx.fillStyle=color+'55';octx.fill();octx.lineWidth=2;octx.strokeStyle=color;octx.stroke();octx.fillStyle='#fff';octx.font='11px -apple-system';octx.fillText(`${Math.round(p.x)},${Math.round(p.y)}`,p.x+13,p.y-10)}
-  function redrawOverlay(){octx.clearRect(0,0,overlay.width,overlay.height);for(const [id,p] of active)drawPoint(p,p.color)}
-  function drawTrail(id,a,b,color){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineWidth=4;ctx.lineCap='round';ctx.strokeStyle=color;ctx.stroke()}
-  function pointerDown(e){e.preventDefault();stage.setPointerCapture?.(e.pointerId);const p={...pos(e),color:palette[e.pointerId%palette.length],radius:(e.width+e.height)/4||9,start:performance.now()};active.set(e.pointerId,p);trails.set(e.pointerId,p);maxTouches=Math.max(maxTouches,active.size);eventBucket++;updateStats();handleMode(e,p,'down');redrawOverlay()}
-  function pointerMove(e){if(!active.has(e.pointerId))return;e.preventDefault();const old=active.get(e.pointerId),p={...old,...pos(e),radius:(e.width+e.height)/4||old.radius};active.set(e.pointerId,p);eventBucket++;if(mode==='multi')drawTrail(e.pointerId,trails.get(e.pointerId),p,p.color);trails.set(e.pointerId,p);handleMode(e,p,'move');redrawOverlay()}
-  function pointerUp(e){const p=active.get(e.pointerId);if(!p)return;eventBucket++;handleMode(e,p,'up');active.delete(e.pointerId);trails.delete(e.pointerId);updateStats();redrawOverlay()}
-  function handleMode(e,p,phase){if(mode==='grid')hitGrid(p);else if(mode==='edge')hitEdge(p);else if(mode==='tap'&&phase==='down')scoreTap(p);else if(mode==='hold')handleHold(e,p,phase)}
-  function buildGrid(){panel.innerHTML='<div id="grid"></div>';panel.className='show';const g=$('#grid');gridCells=[];for(let i=0;i<288;i++){const c=document.createElement('div');c.className='cell';g.append(c);gridCells.push(c)}updateGridDetail()}
-  function hitGrid(p){const r=stage.getBoundingClientRect(),col=Math.max(0,Math.min(11,Math.floor(p.x/r.width*12))),row=Math.max(0,Math.min(23,Math.floor(p.y/r.height*24)));const i=row*12+col;gridCells[i]?.classList.add('hit');updateGridDetail()}
-  function updateGridDetail(){const n=gridCells.filter(c=>c.classList.contains('hit')).length;$('#detail').textContent=`${Math.round(n/288*100)}%`}
-  function buildEdge(){panel.innerHTML='<div id="edge"></div>';panel.className='show';const box=$('#edge'),n=20,t=18;edgeSegments=[];for(const side of ['top','bottom','left','right'])for(let i=0;i<n;i++){const el=document.createElement('div');el.className='edge-seg';el.dataset.side=side;el.dataset.i=i;if(side==='top'||side==='bottom'){el.style.left=(i/n*100)+'%';el.style.width=(100/n)+'%';el.style.height=t+'px';el.style[side]=0}else{el.style.top=(i/n*100)+'%';el.style.height=(100/n)+'%';el.style.width=t+'px';el.style[side]=0}box.append(el);edgeSegments.push(el)}updateEdgeDetail()}
-  function hitEdge(p){const r=stage.getBoundingClientRect(),t=30,n=20,marks=[];if(p.y<t)marks.push(['top',Math.floor(p.x/r.width*n)]);if(p.y>r.height-t)marks.push(['bottom',Math.floor(p.x/r.width*n)]);if(p.x<t)marks.push(['left',Math.floor(p.y/r.height*n)]);if(p.x>r.width-t)marks.push(['right',Math.floor(p.y/r.height*n)]);for(const [s,i] of marks)edgeSegments.find(x=>x.dataset.side===s&&+x.dataset.i===Math.min(n-1,i))?.classList.add('hit');updateEdgeDetail()}
-  function updateEdgeDetail(){const n=edgeSegments.filter(x=>x.classList.contains('hit')).length;$('#detail').textContent=`${n}/80`}
-  function newTarget(){const r=stage.getBoundingClientRect(),m=55,t=$('#target');t.style.left=(m+Math.random()*(r.width-m*2))+'px';t.style.top=(m+Math.random()*(r.height-m*2))+'px';t.style.display='block'}
-  function scoreTap(p){const t=$('#target'),x=parseFloat(t.style.left),y=parseFloat(t.style.top),d=Math.hypot(p.x-x,p.y-y);tapTotal++;if(d<=32)tapHits++;$('#detail').textContent=`${d.toFixed(1)}px`;$('#message').textContent=`本次偏差 ${d.toFixed(1)} px · 命中 ${tapHits}/${tapTotal}`;newTarget()}
-  function startHold(){const r=stage.getBoundingClientRect(),m=$('#holdMark');m.style.left=(r.width/2)+'px';m.style.top=(r.height/2)+'px';m.style.display='block';hold=null;$('#detail').textContent='等待'}
-  function handleHold(e,p,phase){const m=$('#holdMark'),x=parseFloat(m.style.left),y=parseFloat(m.style.top);if(phase==='down'){if(Math.hypot(p.x-x,p.y-y)>44)return;hold={id:e.pointerId,x:p.x,y:p.y,start:performance.now(),max:0};$('#message').textContent='保持手指不动…'}else if(hold?.id===e.pointerId){hold.max=Math.max(hold.max,Math.hypot(p.x-hold.x,p.y-hold.y));const sec=(performance.now()-hold.start)/1000;$('#detail').textContent=`${hold.max.toFixed(1)}px`;$('#message').textContent=`持续 ${sec.toFixed(1)} 秒 · 最大漂移 ${hold.max.toFixed(1)} px`;if(phase==='up')hold=null}}
-  const solidColors=['#000','#fff','#f00','#0f0','#00f','#808080'];let colorIndex=0;
-  function showColor(kind){panel.className='show';if(kind==='bars'){panel.innerHTML='<div class="color-bars">'+['#fff','#ff0','#0ff','#0f0','#f0f','#f00','#00f'].map(c=>`<i style="background:${c}"></i>`).join('')+'</div>'}else{colorIndex=kind==='black'?0:1;panel.innerHTML='<div id="colorPanel"></div>';paintColor();panel.onclick=()=>{colorIndex=(colorIndex+1)%solidColors.length;paintColor()}}}
-  function paintColor(){const c=$('#colorPanel');c.style.background=solidColors[colorIndex];c.style.color=colorIndex===1?'#000':'#fff';c.textContent=['黑','白','红','绿','蓝','灰'][colorIndex]}
-  function setMode(next){mode=next;active.clear();trails.clear();ctx.clearRect(0,0,canvas.width,canvas.height);octx.clearRect(0,0,overlay.width,overlay.height);panel.className='';panel.innerHTML='';panel.onclick=null;$('#target').style.display='none';$('#holdMark').style.display='none';tapHits=tapTotal=0;$('#detail').textContent='—';document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#modeName').textContent=copy[mode][0];$('#message').textContent=copy[mode][1];if(mode==='grid')buildGrid();else if(mode==='edge')buildEdge();else if(mode==='tap')newTarget();else if(mode==='hold')startHold();else if(['black','colors','bars'].includes(mode))showColor(mode)}
-  function clear(){maxTouches=0;eventBucket=0;$('#eventRate').textContent=0;setMode(mode);updateStats()}
-  stage.addEventListener('pointerdown',pointerDown,{passive:false});stage.addEventListener('pointermove',pointerMove,{passive:false});stage.addEventListener('pointerup',pointerUp,{passive:false});stage.addEventListener('pointercancel',pointerUp,{passive:false});
-  function toggleImmersive(){
-    const on=document.body.classList.toggle('immersive');
-    $('#fullBtn').textContent=on?'退出':'沉浸';
-    if(on&&!isStandalone&&isIOS)$('#message').textContent='Safari 会保留浏览器栏：请用“共享 → 添加到主屏幕”，再从桌面打开';
-    else if(on&&document.fullscreenEnabled&&!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});
-    else if(!on&&document.fullscreenElement)document.exitFullscreen?.().catch(()=>{});
-    setTimeout(resize,80);
-  }
-  $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=clear;$('#fullBtn').onclick=toggleImmersive;
-  setInterval(()=>{$('#eventRate').textContent=eventBucket;eventBucket=0},1000);window.addEventListener('resize',resize);resize();setMode('multi');
-  if(isIOS&&!isStandalone)$('#message').textContent='要获得全屏测试：共享 → 添加到主屏幕 → 从桌面图标打开';
-  if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
-})();
-</script>
+<script src="./app.js"></script>
 </body>
 </html>
-
