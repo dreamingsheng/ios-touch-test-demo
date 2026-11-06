@@ -5,7 +5,7 @@
   const ctx = canvas.getContext('2d'), octx = overlay.getContext('2d');
   const active = new Map(), trails = new Map();
   const palette = ['#39d7ff','#ff5b69','#47e68b','#ffd166','#b388ff','#ff8f4c','#56c7ff','#ff77b7','#89f06d','#f5ef71'];
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
   const isStandalone = window.touchTestNative === true || matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
   const copy = {
     multi:['多点轨迹','多根手指同时滑动，检查断线、跳点和最大触点数'],
@@ -46,7 +46,7 @@
   }
   function snapshotMode(){modeResults.set(mode,{name:copy[mode][0],observedAt:new Date().toISOString(),metrics:Array.from({length:4},(_,i)=>({label:$(`#l${i}`).textContent,value:$(`#v${i}`).textContent})),verdict:'未人工验收'})}
   function reportData(includeSamples=false){
-    const data={version:10,startedAt:sessionStarted,exportedAt:new Date().toISOString(),deviceNotes:$('#reportDevice').value,environment:{userAgent:navigator.userAgent,platform:navigator.platform,pixelRatio:devicePixelRatio,viewport:[innerWidth,innerHeight],standalone:isStandalone,coalescedEventsAvailable:typeof PointerEvent!=='undefined'&&typeof PointerEvent.prototype.getCoalescedEvents==='function'},limits:{coordinateUnit:'CSS px relative to test stage',timeUnit:'browser event timeStamp in ms; system/browser processed input, not IC raw reports',sampleLimit,retained:samples.length,totalObserved:sampleCount,dropped:sampleCount-samples.length,hardwareVerdict:'未人工验收'},modes:[...modeResults.entries()].map(([key,value])=>({key,...value}))};
+    const data={version:11,startedAt:sessionStarted,exportedAt:new Date().toISOString(),deviceNotes:$('#reportDevice').value,environment:{userAgent:navigator.userAgent,platform:navigator.platform,pixelRatio:devicePixelRatio,viewport:[innerWidth,innerHeight],standalone:isStandalone,coalescedEventsAvailable:typeof PointerEvent!=='undefined'&&typeof PointerEvent.prototype.getCoalescedEvents==='function'},limits:{coordinateUnit:'CSS px relative to test stage',timeUnit:'browser event timeStamp in ms; system/browser processed input, not IC raw reports',sampleLimit,retained:samples.length,totalObserved:sampleCount,dropped:sampleCount-samples.length,hardwareVerdict:'未人工验收'},modes:[...modeResults.entries()].map(([key,value])=>({key,...value}))};
     if(includeSamples)data.samples=samples;return data;
   }
   function refreshReport(){snapshotMode();$('#reportPreview').value=JSON.stringify(reportData(),null,2);$('#reportStatus').textContent=`保留 ${samples.length} / ${sampleCount} 条采样 · 丢弃 ${sampleCount-samples.length} 条（上限 ${sampleLimit}）`}
@@ -64,8 +64,13 @@
     const vv = window.visualViewport;
     document.documentElement.style.setProperty('--app-height', `${Math.round(vv?.height || innerHeight)}px`);
     document.documentElement.style.setProperty('--app-top', `${Math.round(vv?.offsetTop || 0)}px`);
+    if(isIOS&&isStandalone&&!window.touchTestNative&&Math.min(screen.width,screen.height)<500&&Math.max(screen.width,screen.height)>=812){
+      const landscape=innerWidth>innerHeight,root=document.documentElement.style;
+      root.setProperty('--fallback-safe-top',landscape?'0px':'59px');root.setProperty('--fallback-safe-bottom',landscape?'21px':'34px');root.setProperty('--fallback-safe-left',landscape?'59px':'0px');root.setProperty('--fallback-safe-right',landscape?'59px':'0px');
+    }
     resize();
   }
+  function applySafeInsets(){const root=document.documentElement.style;for(const side of ['top','bottom']){const value=Math.max(0,Math.min(100,+$(`#${side}Inset`).value||0));root.setProperty(`--manual-${side}`,value+'px');$(`#${side}InsetValue`).textContent=value}try{localStorage.setItem('touch-safe-insets',JSON.stringify({top:$('#topInset').value,bottom:$('#bottomInset').value}))}catch(_){}syncViewport();$('#safeMetrics').textContent='额外边距只调整内容区，背景和系统状态栏保持透明。'}
   function resize(){
     const r = stage.getBoundingClientRect(), p = Math.min(devicePixelRatio || 1, 3);
     if(canvas.width===Math.max(1,Math.round(r.width*p))&&canvas.height===Math.max(1,Math.round(r.height*p)))return;
@@ -282,6 +287,7 @@
     snapshotMode();
     if(modeTimer){clearInterval(modeTimer);modeTimer=null}animationToken++;mode=next;active.clear();trails.clear();maxTouches=0;eventBucket=0;gesture=null;hold=null;sceneSwipe=null;joystickId=aimId=null;skillPointers.clear();clearCanvases();hidePanel();$('#target').style.display='none';$('#holdMark').style.display='none';
     stage.classList.toggle('allow-scroll',['ui','menu','type','read'].includes(mode));stage.classList.toggle('game-mode',['moba','aim','cross','video'].includes(mode));document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#modeName').textContent=copy[mode][0];$('#message').textContent=copy[mode][1];
+    document.body.classList.toggle('scene-game',['moba','aim'].includes(mode));
     if(mode==='multi')setStats(['当前触点','最大触点','采样/秒','坐标/压力'],['0','0','0','—']);
     else if(mode==='draw')setStats(['当前触点','最大触点','事件/秒','画笔'],['0','0','0','多指']);
     else if(mode==='line'){lineHit.clear();setStats(['当前触点','最大触点','事件/秒','覆盖率'],['0','0','0','0%']);drawGuides()}
@@ -300,6 +306,8 @@
   stage.addEventListener('pointerdown',e=>{const p=active.get(e.pointerId);if(!p)return;if(mode==='grid')hitGrid(p);if(mode==='edge')hitEdge(p)},{passive:false});
   $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=reset;$('#fullBtn').onclick=toggleImmersive;
   $('#reportBtn').onclick=openReport;$('#closeReport').onclick=()=>{const dialog=$('#reportDialog');if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open')};$('#reportDevice').oninput=refreshReport;$('#exportJson').onclick=()=>downloadReport('json');$('#exportCsv').onclick=()=>downloadReport('csv');
+  $('#safeBtn').onclick=()=>{cancelActive();$('#safeDialog').showModal()};$('#closeSafe').onclick=()=>$('#safeDialog').close();$('#topInset').oninput=applySafeInsets;$('#bottomInset').oninput=applySafeInsets;$('#resetSafe').onclick=()=>{$('#topInset').value=0;$('#bottomInset').value=0;applySafeInsets()};
+  try{const saved=JSON.parse(localStorage.getItem('touch-safe-insets')||'{}');for(const side of ['top','bottom'])$(`#${side}Inset`).value=Math.max(0,Math.min(100,+saved[side]||0))}catch(_){}applySafeInsets();
   setInterval(()=>{val(2,eventBucket);eventBucket=0;if(mode==='multi'&&active.size){const p=active.values().next().value;val(3,`${Math.round(p.x)},${Math.round(p.y)} / ${(p.pressure||0).toFixed(2)}`)}},1000);
   addEventListener('resize',syncViewport);visualViewport?.addEventListener('resize',syncViewport);visualViewport?.addEventListener('scroll',syncViewport);
   const initialMode=copy[location.hash.slice(1)]?location.hash.slice(1):'multi';syncViewport();setMode(initialMode);if(isIOS&&!isStandalone)$('#message').textContent='全屏使用：共享 → 添加到主屏幕 → 从桌面图标打开';

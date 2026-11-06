@@ -26,6 +26,7 @@ struct OfflineSuiteView: UIViewControllerRepresentable {
 final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavigationDelegate {
     var onClose: (() -> Void)?
     private var webView: WKWebView!
+    private var lastInsets: UIEdgeInsets?
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
@@ -82,6 +83,27 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
         }
     }
+    override func viewSafeAreaInsetsDidChange() { super.viewSafeAreaInsetsDidChange(); syncSafeInsets() }
+    override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); syncSafeInsets() }
+    private func syncSafeInsets() {
+        guard isViewLoaded, webView != nil else { return }
+        let windowInsets = view.window?.safeAreaInsets ?? .zero
+        let local = view.safeAreaInsets
+        let inset = UIEdgeInsets(top: max(local.top, windowInsets.top), left: max(local.left, windowInsets.left), bottom: max(local.bottom, windowInsets.bottom), right: max(local.right, windowInsets.right))
+        guard lastInsets != inset else { return }; lastInsets = inset
+        let script = """
+        if(document.documentElement){
+          const root=document.documentElement.style;
+          root.setProperty('--native-safe-top','\(inset.top)px');
+          root.setProperty('--native-safe-right','\(inset.right)px');
+          root.setProperty('--native-safe-bottom','\(inset.bottom)px');
+          root.setProperty('--native-safe-left','\(inset.left)px');
+          window.dispatchEvent(new Event('resize'));
+        }
+        """
+        webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { lastInsets = nil; syncSafeInsets() }
     @objc private func closeSuite() { onClose?() }
     func stop() {
         webView?.stopLoading()

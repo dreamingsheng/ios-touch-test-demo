@@ -23,6 +23,13 @@ node tests/browser-regression.cjs
 - 合并事件中的折线路径必须经过中间采样点。
 - JSON/CSV 导出必须保留该中间点的原始小数坐标、压力、接触宽高、事件来源和 trusted 标记；摘要中的采样数量与导出行数一致。
 - 21 个模式在竖屏、横屏和小屏中都不使页面溢出，测试舞台具有可用高度。
+- 注入实际尺寸的系统安全区（竖屏顶部 59/底部 34、横屏左右 59/底部 21、iPad 顶部 24/底部 20），核对普通与沉浸模式的内容边界。
+
+## IPA 云端检查
+
+工作流 `build-ios.yml` 先编译真机与模拟器产品，再读取成品 Info.plist 和 Web 资源。`scripts/verify-ios-bundle.py` 核对 iPhone/iPad 家族、四方向、全屏设置及全部离线资源哈希。`scripts/simulator-smoke.py` 在当次 runner 实际提供的两种 iPhone、一种 iPad 上启动 App，检查进程存活，保存普通/横屏截图并核对横屏图片方向。具体机型及像素尺寸写入 `simulator-evidence/results.json`，不是预先声称全机型通过。
+
+完整场景为本地 WKWebView，原生六项为 UIKit/SwiftUI。内置页面从 UIKit 接收安全区；报告导出经 WKScriptMessageHandler 交给系统分享面板，iPad 设置弹出锚点。所有这些仍需要目标真机进行触控、分享与键盘验收。
 
 这些断言验证网页逻辑和基本布局，不能证明 iOS 系统状态栏、键盘、手势优先级或真实传感器正常。
 
