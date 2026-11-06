@@ -12,6 +12,14 @@
 
 应用读取 iOS 提供的 `UITouch` 事件，不能访问 Goodix 等触控 IC 的原始电容矩阵或工厂固件接口。
 
+## 浏览器直接使用（推荐）
+
+公开地址：<https://dreamingsheng.github.io/ios-touch-test-demo/>
+
+在 iPhone Safari 中打开后，点击“共享”→“添加到主屏幕”。PWA 版无需 Apple 签名、证书验证或每 7 天续签，并支持离线使用。
+
+PWA 版包含多点轨迹、12 × 24 网格死区、边缘扫描、点击精度、长按漂移以及纯色/灰阶/彩条显示测试。受 Safari 能力限制，无法读取原生 `UITouch` 的全部压力信息。
+
 ## 免费构建
 
 每次推送到 `main` 后，GitHub Actions 会在 macOS runner 上生成未签名的 `TouchTestApp-unsigned.ipa`。

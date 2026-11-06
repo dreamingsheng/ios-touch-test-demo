@@ -1,0 +1,15 @@
+{
+  "name": "Touch Test - 多点触控测试",
+  "short_name": "Touch Test",
+  "description": "多点轨迹、坏点网格、边缘、点击精度、长按漂移与屏幕色彩测试",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "icons": [
+    {"src":"./icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
+
