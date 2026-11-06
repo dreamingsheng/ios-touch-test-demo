@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 // MARK: - Native multi-touch sampler
 
@@ -51,6 +52,7 @@ final class SamplingView: UIView {
             if phase == .ended || phase == .cancelled { active[key] = nil } else { active[key] = touch }
         }
         let current = active.compactMap { key, touch in ids[key].map { sample(touch, $0, .moved) } }.sorted { $0.id < $1.id }
+        batch.sort { $0.timestamp == $1.timestamp ? $0.id < $1.id : $0.timestamp < $1.timestamp }
         onUpdate?(batch, current)
         if phase == .ended || phase == .cancelled {
             touches.forEach { ids[ObjectIdentifier($0)] = nil }
@@ -64,7 +66,7 @@ final class SamplingView: UIView {
             location: touch.location(in: self),
             timestamp: touch.timestamp,
             force: maximum > 0 ? min(max(touch.force / maximum, 0), 1) : 0,
-            radius: max(touch.majorRadius, 8),
+            radius: touch.majorRadius,
             phase: phase
         )
     }
@@ -109,6 +111,7 @@ private struct OverlayHeader: View {
 // MARK: - Test menu
 
 struct TouchTestView: View {
+    @State private var showSuite = false
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -117,8 +120,19 @@ struct TouchTestView: View {
                         Label("常规触控测试套件", systemImage: "waveform.path.ecg.rectangle").font(.title3.bold())
                         Text("建议擦净屏幕并拔掉充电器，依次测试多点、网格、边缘、点击和长按；异常时取下保护膜复测。")
                             .font(.subheadline).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(16).background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 18))
-                    TestLink("hand.tap.fill", .cyan, "多点触控与轨迹", "上限、坐标、接触面、事件率和疑似断触") { MultiTouchView() }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(16).background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                    Button { showSuite = true } label: {
+                        HStack {
+                            Image(systemName: "square.grid.3x3.fill").font(.title2)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("完整离线测试 · 21 项").font(.headline)
+                                Text("画画、鬼点、游戏、阅读、视频、多级菜单、打字和报告导出").font(.caption)
+                            }
+                            Spacer(); Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        }.padding(16).foregroundStyle(.black).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                    }.buttonStyle(.plain)
+                    Text("原生 UITouch 采样").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
+                    TestLink("hand.tap.fill", .white, "多点触控与轨迹", "上限、坐标、接触面、事件率和疑似断触") { MultiTouchView() }
                     TestLink("square.grid.3x3.fill", .green, "全屏网格死区", "涂满 12×24 网格，查找无法触达的区域") { GridView() }
                     TestLink("rectangle.dashed", .orange, "边缘与四角", "分段扫描四边，检查贴边响应") { EdgeView() }
                     TestLink("scope", .pink, "点击精度", "随机靶心测试，统计平均和最大偏差") { AccuracyView() }
@@ -132,7 +146,14 @@ struct TouchTestView: View {
                 }.padding()
             }
             .background(Color(uiColor: .systemGroupedBackground)).navigationTitle("触控诊断")
-        }.tint(.cyan)
+        }.tint(.white)
+        .fullScreenCover(isPresented: $showSuite) {
+            OfflineSuiteView { showSuite = false }
+                .ignoresSafeArea()
+                .statusBarHidden(true)
+                .persistentSystemOverlays(.hidden)
+        }
+        .onAppear { if ProcessInfo.processInfo.arguments.contains("--offline-suite") { showSuite = true } }
     }
 }
 
@@ -144,7 +165,7 @@ private struct TestLink<D: View>: View {
     var body: some View {
         NavigationLink(destination: destination()) {
             HStack(spacing: 13) {
-                Image(systemName: icon).font(.title2).foregroundStyle(color).frame(width: 42, height: 42).background(color.opacity(0.13), in: RoundedRectangle(cornerRadius: 12))
+                Image(systemName: icon).font(.title2).foregroundStyle(.white).frame(width: 42, height: 42).background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title).font(.headline).foregroundStyle(.primary)
                     Text(detail).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
@@ -181,10 +202,12 @@ private struct TestLink<D: View>: View {
         if let now = recent.last { recent.removeAll { now - $0 > 1 }; rate = recent.count }
     }
     func reset() { active = []; trails = [:]; maximum = 0; rate = 0; gaps = 0; recent = []; previous = [:] }
+    func tick() { let now = ProcessInfo.processInfo.systemUptime; recent.removeAll { now - $0 > 1 }; rate = recent.count }
 }
 
 private struct MultiTouchView: View {
     @StateObject private var model = MultiModel()
+    private let clock = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
@@ -201,7 +224,7 @@ private struct MultiTouchView: View {
                     context.draw(Text("\(item.id)").font(.headline).foregroundColor(.white), at: item.location)
                 }
             }.allowsHitTesting(false)
-            TouchSurface { model.update($0, $1) }.ignoresSafeArea()
+            TouchSurface { model.update($0, $1) }
             VStack(spacing: 5) {
                 OverlayHeader(title: "多点触控与连续性", help: "同时放入多根手指缓慢划动；轨迹应连续且触点不应跳跃。", reset: model.reset)
                 HStack(spacing: 6) {
@@ -216,7 +239,7 @@ private struct MultiTouchView: View {
                 }
                 Spacer()
             }.allowsHitTesting(false)
-        }.fullScreenTestStyle()
+        }.fullScreenTestStyle().onReceive(clock) { _ in model.tick() }.toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("重置", action: model.reset) } }
     }
 }
 
@@ -238,10 +261,10 @@ private struct GridView: View {
                         context.stroke(Path(rect), with: .color(.white.opacity(0.14)), lineWidth: 0.5)
                     }}
                 }.allowsHitTesting(false)
-                TouchSurface { batch, _ in mark(batch, proxy.size) }.ignoresSafeArea()
+                TouchSurface { batch, _ in mark(batch, proxy.size) }
                 OverlayHeader(title: "网格死区 \(hit.count)/\(columns * rows) · \(hit.count * 100 / (columns * rows))%", help: "用单指逐行涂满。始终无法点亮的格子可能是死区。", reset: { hit.removeAll() }).allowsHitTesting(false)
             }
-        }.fullScreenTestStyle()
+        }.fullScreenTestStyle().toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("重置") { hit.removeAll() } } }
     }
     private func mark(_ batch: [TouchSample], _ size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
@@ -263,7 +286,7 @@ private struct EdgeView: View {
             ZStack(alignment: .top) {
                 Color.black.ignoresSafeArea()
                 Canvas { context, size in draw(context, size) }.allowsHitTesting(false)
-                TouchSurface { batch, _ in mark(batch, proxy.size) }.ignoresSafeArea()
+                TouchSurface { batch, _ in mark(batch, proxy.size) }
                 VStack {
                     OverlayHeader(title: "边缘扫描 \(hit.count)/\(count * 4)", help: "沿四边缓慢滑动并覆盖四角；全部分段应变绿。", reset: { hit.removeAll() })
                     Spacer()
@@ -271,7 +294,7 @@ private struct EdgeView: View {
                         .font(.headline).padding(.horizontal, 16).padding(.vertical, 9).background(.ultraThinMaterial, in: Capsule()).padding(.bottom, 25)
                 }.allowsHitTesting(false)
             }
-        }.fullScreenTestStyle()
+        }.fullScreenTestStyle().toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("重置") { hit.removeAll() } } }
     }
     private func draw(_ context: GraphicsContext, _ size: CGSize) {
         let w = size.width / CGFloat(count), h = size.height / CGFloat(count)
@@ -320,7 +343,7 @@ private struct AccuracyView: View {
                 }.allowsHitTesting(false)
                 TouchSurface { batch, _ in
                     if let tap = batch.first(where: { $0.phase == .began }) { register(tap.location, point) }
-                }.ignoresSafeArea()
+                }
                 VStack(spacing: 4) {
                     OverlayHeader(title: "点击精度", help: "准确点击十字靶心；粉点是实际落点。", reset: reset)
                     HStack(spacing: 6) {
@@ -332,7 +355,7 @@ private struct AccuracyView: View {
                     Spacer()
                 }.allowsHitTesting(false)
             }
-        }.fullScreenTestStyle()
+        }.fullScreenTestStyle().toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("重置", action: reset) } }
     }
     private func register(_ actual: CGPoint, _ expected: CGPoint) {
         let error = hypot(actual.x - expected.x, actual.y - expected.y)
@@ -351,6 +374,8 @@ private struct HoldView: View {
     @State private var duration: TimeInterval = 0
     @State private var drift: CGFloat = 0
     @State private var samples = 0
+    @State private var heldID: Int?
+    private let clock = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     var body: some View {
         GeometryReader { proxy in
             let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height * 0.58)
@@ -366,7 +391,7 @@ private struct HoldView: View {
                         context.fill(Path(ellipseIn: CGRect(x: current.x - 7, y: current.y - 7, width: 14, height: 14)), with: .color(.yellow))
                     }
                 }.allowsHitTesting(false)
-                TouchSurface { update($0, $1) }.ignoresSafeArea()
+                TouchSurface { update($0, $1, center: center) }
                 VStack(spacing: 4) {
                     OverlayHeader(title: "长按稳定性", help: "在中央圆圈内单指保持 5 秒，漂移越小越稳定。", reset: reset)
                     HStack(spacing: 6) {
@@ -378,19 +403,25 @@ private struct HoldView: View {
                     Text(duration >= 5 ? "已完成 5 秒长按" : "请在圆圈中长按").font(.headline).foregroundStyle(duration >= 5 ? .green : .white).padding(.bottom, 35)
                 }.allowsHitTesting(false)
             }
-        }.fullScreenTestStyle()
+        }.fullScreenTestStyle().onReceive(clock) { _ in
+            if let began, heldID != nil { duration = max(0, ProcessInfo.processInfo.systemUptime - began) }
+        }.toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("重置", action: reset) } }
     }
-    private func update(_ batch: [TouchSample], _ active: [TouchSample]) {
+    private func update(_ batch: [TouchSample], _ active: [TouchSample], center: CGPoint) {
         for p in batch {
-            if origin == nil && p.phase == .began { origin = p.location; began = p.timestamp }
+            if heldID == nil && p.phase == .began && hypot(p.location.x - center.x, p.location.y - center.y) <= 70 {
+                origin = p.location; began = p.timestamp; heldID = p.id; duration = 0; drift = 0; samples = 0
+            }
+            guard p.id == heldID else { continue }
             if let origin, let began {
                 current = p.location; duration = max(duration, p.timestamp - began)
                 drift = max(drift, hypot(p.location.x - origin.x, p.location.y - origin.y)); samples += 1
             }
+            if p.phase == .ended || p.phase == .cancelled { heldID = nil; origin = nil; current = nil; began = nil }
         }
         if active.isEmpty && batch.contains(where: { $0.phase == .ended || $0.phase == .cancelled }) { origin = nil; current = nil; began = nil }
     }
-    private func reset() { origin = nil; current = nil; began = nil; duration = 0; drift = 0; samples = 0 }
+    private func reset() { origin = nil; current = nil; began = nil; heldID = nil; duration = 0; drift = 0; samples = 0 }
 }
 
 // MARK: - Display patterns

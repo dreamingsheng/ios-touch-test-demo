@@ -6,7 +6,7 @@
   const active = new Map(), trails = new Map();
   const palette = ['#39d7ff','#ff5b69','#47e68b','#ffd166','#b388ff','#ff8f4c','#56c7ff','#ff77b7','#89f06d','#f5ef71'];
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  const isStandalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
+  const isStandalone = window.touchTestNative === true || matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
   const copy = {
     multi:['多点轨迹','多根手指同时滑动，检查断线、跳点和最大触点数'],
     draw:['自由画画','用一根或多根手指连续绘画，观察断线和异常笔迹'],
@@ -36,6 +36,29 @@
   let tapHits = 0, tapTotal = 0, hold = null, gesture = null, joystickId = null, aimId = null, crossIds = {axis:null,cursor:null};
   let skillPointers = new Map(), shots = 0, autoScore = {sum:0,count:0}, sceneSwipe = null, readPage = 0, videoIndex = 0;
   let videoStates=[],videoPaused=false;
+  const sessionStarted=new Date().toISOString(), sampleLimit=10000, samples=[], modeResults=new Map();
+  let sampleCount=0;
+  function recordSample(e,p,phase,source='dispatched'){
+    sampleCount++;
+    if(samples.length>=sampleLimit)return;
+    const r=stage.getBoundingClientRect();
+    samples.push({mode,phase,source,pointerId:e.pointerId,pointerType:e.pointerType||'unknown',trusted:e.isTrusted===true,timeStamp:Number.isFinite(e.timeStamp)?e.timeStamp:performance.now(),x:p.x,y:p.y,pressure:p.pressure,contactWidth:p.contactWidth,contactHeight:p.contactHeight,stageWidth:r.width,stageHeight:r.height});
+  }
+  function snapshotMode(){modeResults.set(mode,{name:copy[mode][0],observedAt:new Date().toISOString(),metrics:Array.from({length:4},(_,i)=>({label:$(`#l${i}`).textContent,value:$(`#v${i}`).textContent})),verdict:'未人工验收'})}
+  function reportData(includeSamples=false){
+    const data={version:10,startedAt:sessionStarted,exportedAt:new Date().toISOString(),deviceNotes:$('#reportDevice').value,environment:{userAgent:navigator.userAgent,platform:navigator.platform,pixelRatio:devicePixelRatio,viewport:[innerWidth,innerHeight],standalone:isStandalone,coalescedEventsAvailable:typeof PointerEvent!=='undefined'&&typeof PointerEvent.prototype.getCoalescedEvents==='function'},limits:{coordinateUnit:'CSS px relative to test stage',timeUnit:'browser event timeStamp in ms; system/browser processed input, not IC raw reports',sampleLimit,retained:samples.length,totalObserved:sampleCount,dropped:sampleCount-samples.length,hardwareVerdict:'未人工验收'},modes:[...modeResults.entries()].map(([key,value])=>({key,...value}))};
+    if(includeSamples)data.samples=samples;return data;
+  }
+  function refreshReport(){snapshotMode();$('#reportPreview').value=JSON.stringify(reportData(),null,2);$('#reportStatus').textContent=`保留 ${samples.length} / ${sampleCount} 条采样 · 丢弃 ${sampleCount-samples.length} 条（上限 ${sampleLimit}）`}
+  function openReport(){cancelActive();refreshReport();const dialog=$('#reportDialog');if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','')}
+  function downloadReport(format){
+    refreshReport();let content,type;
+    if(format==='json'){content=JSON.stringify(reportData(true),null,2);type='application/json'}
+    else{const keys=['mode','phase','source','pointerId','pointerType','trusted','timeStamp','x','y','pressure','contactWidth','contactHeight','stageWidth','stageHeight'];const cell=value=>'"'+String(value??'').replaceAll('"','""')+'"';content=keys.join(',')+'\r\n'+samples.map(row=>keys.map(key=>cell(row[key])).join(',')).join('\r\n');type='text/csv;charset=utf-8'}
+    const filename='touch-test-'+sessionStarted.replaceAll(':','-')+'.'+format;
+    if(window.touchTestNative&&window.webkit?.messageHandlers?.touchTestNative){window.webkit.messageHandlers.touchTestNative.postMessage({action:'export',content,filename});return}
+    const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  }
 
   function syncViewport(){
     const vv = window.visualViewport;
@@ -79,6 +102,7 @@
     if(e.target.closest('button,input,textarea,select,label') && !e.target.closest('.fire')) return;
     e.preventDefault(); stage.setPointerCapture?.(e.pointerId);
     const p={...pointFromEvent(e),color:palette[Math.abs(e.pointerId)%palette.length],start:performance.now()};
+    recordSample(e,p,'down');
     active.set(e.pointerId,p);trails.set(e.pointerId,p);maxTouches=Math.max(maxTouches,active.size);eventBucket++;updateTouchStats();
     if(mode==='ghost') registerGhost();
     if(['multi','draw','line'].includes(mode)){ctx.beginPath();ctx.arc(p.x,p.y,mode==='draw'?3:2,0,Math.PI*2);ctx.fillStyle=p.color;ctx.fill()}
@@ -91,11 +115,13 @@
     if(mode==='read'||mode==='video')sceneSwipe={id:e.pointerId,startX:p.x,startY:p.y,x:p.x,y:p.y};
     redrawOverlay();
   }
-  function pointerMove(e){
+  function pointerMove(e,record=true){
     if(!active.has(e.pointerId))return;e.preventDefault();
     const previous=active.get(e.pointerId);let old=previous,p=old;
-    for(const sample of movementSamples(e)){
-      p=pointFromEvent(sample,old);eventBucket++;
+    const movement=movementSamples(e);
+    for(const sample of movement){
+      p=pointFromEvent(sample,old);if(record)eventBucket++;
+      if(record)recordSample(sample,p,'move',sample===e?'dispatched':'coalesced');
       if(mode==='multi'||mode==='draw'||mode==='line'){drawTrail(old,p,p.color,mode==='draw'?6:4);if(mode==='line')scoreLine(p)}
       if(mode==='grid')hitGrid(p);
       if(mode==='edge')hitEdge(p);
@@ -115,14 +141,16 @@
     const p=active.get(e.pointerId);if(!p)return;eventBucket++;
     if(e.type==='pointerup'&&Number.isFinite(e.clientX)&&Number.isFinite(e.clientY)){
       const end=pointFromEvent(e,p);
-      if(end.x!==p.x||end.y!==p.y)pointerMove(e);
+      if(end.x!==p.x||end.y!==p.y)pointerMove(e,false);
     }
+    recordSample(e,e.type==='pointerup'?pointFromEvent(e,active.get(e.pointerId)):active.get(e.pointerId),e.type==='pointerup'?'up':'cancel');
     if(mode==='hold') endHold(e.pointerId,p);
     if(mode==='moba'||mode==='aim') gameUp(e.pointerId);
     if(mode==='cross') crossUp(e.pointerId);
     if(sceneSwipe?.id===e.pointerId){if(e.type==='pointercancel'||e.type==='lostpointercapture')sceneSwipe=null;else finishSceneSwipe()}
     active.delete(e.pointerId);trails.delete(e.pointerId);
     if(['ghost','auto'].includes(mode))val(mode==='ghost'?1:0,active.size);
+    if(mode==='hold')val(3,active.size);
     if((mode==='pinch'||mode==='map')&&gesture)gesture.last=gestureSnapshot();
     if(mode==='pinch'||mode==='map')renderGesture();
     updateTouchStats();redrawOverlay();
@@ -251,6 +279,7 @@
   function paintColor(){const c=$('#colorPanel');c.style.background=solidColors[colorIndex];c.style.color=colorIndex===1?'#000':'#fff';c.textContent=['黑','白','红','绿','蓝','灰'][colorIndex];val(0,c.textContent)}
 
   function setMode(next){
+    snapshotMode();
     if(modeTimer){clearInterval(modeTimer);modeTimer=null}animationToken++;mode=next;active.clear();trails.clear();maxTouches=0;eventBucket=0;gesture=null;hold=null;sceneSwipe=null;joystickId=aimId=null;skillPointers.clear();clearCanvases();hidePanel();$('#target').style.display='none';$('#holdMark').style.display='none';
     stage.classList.toggle('allow-scroll',['ui','menu','type','read'].includes(mode));stage.classList.toggle('game-mode',['moba','aim','cross','video'].includes(mode));document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#modeName').textContent=copy[mode][0];$('#message').textContent=copy[mode][1];
     if(mode==='multi')setStats(['当前触点','最大触点','采样/秒','坐标/压力'],['0','0','0','—']);
@@ -270,8 +299,9 @@
   addEventListener('blur',cancelActive);document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelActive();if(mode==='ghost'&&ghostLeft>0){clearInterval(modeTimer);modeTimer=null;ghostLeft=0;$('#ghostTime').textContent='中断';val(3,'中断');$('#ghostText').textContent='离开前台，结果无效；请重置后重新测试'}}});
   stage.addEventListener('pointerdown',e=>{const p=active.get(e.pointerId);if(!p)return;if(mode==='grid')hitGrid(p);if(mode==='edge')hitEdge(p)},{passive:false});
   $('#nav').addEventListener('click',e=>{const b=e.target.closest('button[data-mode]');if(b)setMode(b.dataset.mode)});$('#clearBtn').onclick=reset;$('#fullBtn').onclick=toggleImmersive;
+  $('#reportBtn').onclick=openReport;$('#closeReport').onclick=()=>{const dialog=$('#reportDialog');if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open')};$('#reportDevice').oninput=refreshReport;$('#exportJson').onclick=()=>downloadReport('json');$('#exportCsv').onclick=()=>downloadReport('csv');
   setInterval(()=>{val(2,eventBucket);eventBucket=0;if(mode==='multi'&&active.size){const p=active.values().next().value;val(3,`${Math.round(p.x)},${Math.round(p.y)} / ${(p.pressure||0).toFixed(2)}`)}},1000);
   addEventListener('resize',syncViewport);visualViewport?.addEventListener('resize',syncViewport);visualViewport?.addEventListener('scroll',syncViewport);
   const initialMode=copy[location.hash.slice(1)]?location.hash.slice(1):'multi';syncViewport();setMode(initialMode);if(isIOS&&!isStandalone)$('#message').textContent='全屏使用：共享 → 添加到主屏幕 → 从桌面图标打开';
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{});
+  if('serviceWorker' in navigator&&!window.touchTestNative)navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(r=>r.update()).catch(()=>{});
 })();

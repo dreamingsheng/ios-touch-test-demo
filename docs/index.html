@@ -11,12 +11,12 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./style.css?v=9">
+  <link rel="stylesheet" href="./style.css?v=10">
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="title"><h1>Touch Test <small>v9</small></h1><small id="modeName">多点轨迹</small></div>
+    <div class="title"><h1>Touch Test <small>v10</small></h1><small id="modeName">多点轨迹</small><button id="reportBtn">报告</button></div>
     <div id="stats">
       <div class="stat"><b id="v0">0</b><span id="l0">当前触点</span></div>
       <div class="stat"><b id="v1">0</b><span id="l1">最大触点</span></div>
@@ -34,6 +34,7 @@
     <button data-mode="multi" class="active">多点</button><button data-mode="draw">画画</button><button data-mode="line">划线</button><button data-mode="ghost">鬼点</button><button data-mode="auto">自动跟随</button><button data-mode="grid">坏点网格</button><button data-mode="edge">边缘</button><button data-mode="pinch">图片缩放</button><button data-mode="map">地图手势</button><button data-mode="read">阅读翻页</button><button data-mode="video">短视频</button><button data-mode="moba">MOBA轮盘</button><button data-mode="aim">射击瞄准</button><button data-mode="ui">控件设置</button><button data-mode="menu">多级菜单</button><button data-mode="type">打字</button><button data-mode="cross">十字轴光标</button><button data-mode="tap">点击精度</button><button data-mode="hold">长按漂移</button><button data-mode="colors">纯色切换</button><button data-mode="bars">标准色条</button>
   </nav>
 </div>
-<script src="./app.js?v=9"></script>
+<dialog id="reportDialog" aria-labelledby="reportTitle"><div class="report-heading"><h2 id="reportTitle">本次测试报告</h2><button id="closeReport">关闭</button></div><p>采样与报告只留在本页内存中，不自动上传。导出后可复查轨迹；页面重开会清空。报告不自动判定硬件合格。</p><label>设备型号 / 测试条件<input id="reportDevice" maxlength="160" placeholder="例如：iPhone 型号、iOS 版本、充电/未充电"></label><p id="reportStatus" role="status"></p><textarea id="reportPreview" readonly aria-label="报告预览"></textarea><div class="report-actions"><button id="exportJson">导出完整 JSON</button><button id="exportCsv">导出轨迹 CSV</button></div></dialog>
+<script src="./app.js?v=10"></script>
 </body>
 </html>

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ios-test-latest
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-latest
@@ -20,6 +24,7 @@ jobs:
           mkdir -p TouchTestApp.xcodeproj/xcshareddata/xcschemes
           mv TouchTestApp.swift TouchTestApp/
           mv TouchTestView.swift TouchTestApp/
+          cp -R docs TouchTestApp/Web
           mv project.pbxproj TouchTestApp.xcodeproj/
           mv TouchTestApp.xcscheme TouchTestApp.xcodeproj/xcshareddata/xcschemes/
 
@@ -34,19 +39,44 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             clean build
+
+      - name: Verify universal app and bundled scenarios
+        run: |
+          python3 scripts/verify-ios-bundle.py build/Build/Products/Release-iphoneos/TouchTestApp.app
+
+      - name: Build simulator app
+        run: |
+          xcodebuild -project TouchTestApp.xcodeproj -scheme TouchTestApp \
+            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath simulator-build CODE_SIGNING_ALLOWED=NO build
+
+      - name: Smoke test iPhone and iPad simulators
+        run: python3 scripts/simulator-smoke.py simulator-build/Build/Products/Release-iphonesimulator/TouchTestApp.app
+
+      - name: Upload simulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-evidence
+          path: simulator-evidence/
+          if-no-files-found: warn
 
       - name: Package unsigned IPA
         run: |
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/TouchTestApp.app Payload/
           ditto -c -k --sequesterRsrc --keepParent Payload TouchTestApp-unsigned.ipa
+          shasum -a 256 TouchTestApp-unsigned.ipa > TouchTestApp-unsigned.ipa.sha256
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: TouchTestApp-unsigned
-          path: TouchTestApp-unsigned.ipa
+          path: |
+            TouchTestApp-unsigned.ipa
+            TouchTestApp-unsigned.ipa.sha256
           if-no-files-found: error
 
       - name: Publish latest test IPA
@@ -55,4 +85,6 @@ jobs:
         run: |
           gh release view test-latest >/dev/null 2>&1 || \
             gh release create test-latest --title "Latest test build" --notes "Unsigned IPA for SideStore or AltStore testing."
-          gh release upload test-latest TouchTestApp-unsigned.ipa --clobber
+          test "$(gh api repos/${{ github.repository }}/commits/main --jq .sha)" = "${{ github.sha }}"
+          gh release upload test-latest TouchTestApp-unsigned.ipa TouchTestApp-unsigned.ipa.sha256 --clobber
+          gh release edit test-latest --notes "Unsigned universal iPhone/iPad IPA, iOS 16+. Includes native UITouch diagnostics and all 21 offline scenarios. Version 3.0, build ${{ github.run_number }}, commit ${{ github.sha }}. Sign with your own tool. See simulator-evidence artifact and TESTING.md; physical-device acceptance is still required."
