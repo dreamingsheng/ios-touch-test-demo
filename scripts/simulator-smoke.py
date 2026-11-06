@@ -32,7 +32,7 @@ for device in selected:
         run('xcrun', 'simctl', 'bootstatus', udid, '-b')
         run('xcrun', 'simctl', 'install', udid, str(app))
         for landscape in [False, True]:
-            arguments = ['--offline-suite'] + (['--landscape'] if landscape else [])
+            arguments = ['--offline-suite', '--smoke-evidence'] + (['--landscape'] if landscape else [])
             launched = run('xcrun', 'simctl', 'launch', '--terminate-running-process', udid, bundle, *arguments)
             time.sleep(6)
             processes = run('xcrun', 'simctl', 'spawn', udid, 'launchctl', 'list')
@@ -41,9 +41,24 @@ for device in selected:
             screenshot = output / f'{name}-{"landscape" if landscape else "portrait"}.png'
             run('xcrun', 'simctl', 'io', udid, 'screenshot', str(screenshot))
             width, height = struct.unpack('>II', screenshot.read_bytes()[16:24])
-            if landscape: assert width > height, f'Landscape request failed: {device["name"]} {width}x{height}'
+            container = pathlib.Path(run('xcrun', 'simctl', 'get_app_container', udid, bundle, 'data').strip())
+            layout_file = container / 'Documents' / 'layout-evidence.json'
+            for attempt in range(30):
+                if layout_file.exists(): break
+                time.sleep(1)
+            layout = json.loads(layout_file.read_text())
+            assert layout['modeCount'] == 21 and 'v11' in layout['title'], layout
+            viewport = layout['viewport']
+            assert (viewport['width'] > viewport['height']) == landscape, layout
+            assert layout['orientation'] in ([3, 4] if landscape else [1, 2]), layout
+            inset = layout['safeInsets']
+            assert layout['header']['top'] >= inset['top'] + 3, layout
+            assert layout['nav']['bottom'] <= viewport['height'] - inset['bottom'] - 3, layout
+            assert layout['stage']['left'] >= inset['left'] + 3, layout
+            assert layout['stage']['right'] <= viewport['width'] - inset['right'] - 3, layout
+            (output / (screenshot.stem + '.json')).write_text(json.dumps(layout, indent=2))
             evidence.append({'device': device['name'], 'landscape': landscape,
-                             'pixels': [width, height], 'file': str(screenshot), 'launch': launched.strip()})
+                             'pixels': [width, height], 'viewport': viewport, 'file': str(screenshot), 'launch': launched.strip()})
             (output / 'results.json').write_text(json.dumps(evidence, indent=2))
     finally:
         subprocess.run(['xcrun', 'simctl', 'shutdown', udid], check=False, capture_output=True)

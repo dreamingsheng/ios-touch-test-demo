@@ -78,9 +78,9 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        if ProcessInfo.processInfo.arguments.contains("--landscape"), let scene = view.window?.windowScene {
+        if ProcessInfo.processInfo.arguments.contains("--smoke-evidence"), let scene = view.window?.windowScene {
             setNeedsUpdateOfSupportedInterfaceOrientations()
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: ProcessInfo.processInfo.arguments.contains("--landscape") ? .landscapeRight : .portrait))
         }
     }
     override func viewSafeAreaInsetsDidChange() { super.viewSafeAreaInsetsDidChange(); syncSafeInsets() }
@@ -103,7 +103,29 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
         """
         webView.evaluateJavaScript(script, completionHandler: nil)
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { lastInsets = nil; syncSafeInsets() }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        lastInsets = nil; syncSafeInsets()
+        guard ProcessInfo.processInfo.arguments.contains("--smoke-evidence") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.writeLayoutEvidence() }
+    }
+    private func writeLayoutEvidence() {
+        let script = """
+        (()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {top:r.top,left:r.left,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+        return {viewport:{width:innerWidth,height:innerHeight},header:rect('header'),nav:rect('#nav'),stage:rect('#stage'),modeCount:document.querySelectorAll('[data-mode]').length,title:document.querySelector('h1').textContent,mode:document.querySelector('#modeName').textContent};})()
+        """
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            guard let self else { return }
+            var data = result as? [String: Any] ?? ["error": error?.localizedDescription ?? "No layout data"]
+            data["viewWidth"] = self.view.bounds.width; data["viewHeight"] = self.view.bounds.height
+            data["orientation"] = self.view.window?.windowScene?.interfaceOrientation.rawValue ?? 0
+            let inset = self.lastInsets ?? .zero
+            data["safeInsets"] = ["top": inset.top, "right": inset.right, "bottom": inset.bottom, "left": inset.left]
+            if let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+               let encoded = try? JSONSerialization.data(withJSONObject: data, options: .prettyPrinted) {
+                try? encoded.write(to: folder.appendingPathComponent("layout-evidence.json"), options: .atomic)
+            }
+        }
+    }
     @objc private func closeSuite() { onClose?() }
     func stop() {
         webView?.stopLoading()
