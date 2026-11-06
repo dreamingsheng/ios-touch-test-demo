@@ -27,6 +27,8 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
     var onClose: (() -> Void)?
     private var webView: WKWebView!
     private var lastInsets: UIEdgeInsets?
+    private var smokeTimer: Timer?
+    private var lastSmokeSequence = ""
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
@@ -59,6 +61,9 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
         webView.scrollView.bounces = false
         webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
+        if ProcessInfo.processInfo.arguments.contains("--smoke-evidence") {
+            smokeTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.pollSmokeCommand() }
+        }
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -110,16 +115,33 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
         guard ProcessInfo.processInfo.arguments.contains("--smoke-evidence") else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.writeLayoutEvidence() }
     }
-    private func writeLayoutEvidence() {
+    private func pollSmokeCommand() {
+        guard let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+              let data = try? Data(contentsOf: folder.appendingPathComponent("smoke-command.json")),
+              let command = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let sequence = command["sequence"], sequence != lastSmokeSequence,
+              let mode = command["mode"], mode.range(of: "^[a-z]+$", options: .regularExpression) != nil else { return }
+        lastSmokeSequence = sequence
+        if let scene = view.window?.windowScene {
+            setNeedsUpdateOfSupportedInterfaceOrientations()
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: command["orientation"] == "landscape" ? .landscapeRight : .portrait))
+        }
+        let script = "document.querySelector('[data-mode=\"\(mode)\"]')?.click()"
+        webView.evaluateJavaScript(script) { [weak self] _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.writeLayoutEvidence(sequence) }
+        }
+    }
+    private func writeLayoutEvidence(_ sequence: String = "initial") {
         let script = """
         (()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {top:r.top,left:r.left,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
-        return {viewport:{width:innerWidth,height:innerHeight},header:rect('header'),nav:rect('#nav'),stage:rect('#stage'),modeCount:document.querySelectorAll('[data-mode]').length,title:document.querySelector('h1').textContent,mode:document.querySelector('#modeName').textContent};})()
+        return {viewport:{width:innerWidth,height:innerHeight},app:rect('#app'),body:rect('body'),header:rect('header'),nav:rect('#nav'),stage:rect('#stage'),modeCount:document.querySelectorAll('[data-mode]').length,title:document.querySelector('h1').textContent,mode:document.querySelector('#modeName').textContent,activeMode:document.querySelector('nav button.active').dataset.mode};})()
         """
         webView.evaluateJavaScript(script) { [weak self] result, error in
             guard let self else { return }
             var data = result as? [String: Any] ?? ["error": error?.localizedDescription ?? "No layout data"]
             data["viewWidth"] = self.view.bounds.width; data["viewHeight"] = self.view.bounds.height
             data["orientation"] = self.view.window?.windowScene?.interfaceOrientation.rawValue ?? 0
+            data["requestSequence"] = sequence
             let inset = self.lastInsets ?? .zero
             data["safeInsets"] = ["top": inset.top, "right": inset.right, "bottom": inset.bottom, "left": inset.left]
             if let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
@@ -130,6 +152,7 @@ final class SuiteWebController: UIViewController, WKScriptMessageHandler, WKNavi
     }
     @objc private func closeSuite() { onClose?() }
     func stop() {
+        smokeTimer?.invalidate(); smokeTimer = nil
         webView?.stopLoading()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "touchTestNative")
         webView?.navigationDelegate = nil

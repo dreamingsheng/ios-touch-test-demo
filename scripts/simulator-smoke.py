@@ -12,6 +12,8 @@ output = pathlib.Path('simulator-evidence')
 output.mkdir(exist_ok=True)
 bundle = 'com.example.TouchTestDemo'
 expected_version = re.search(r'Touch Test <small>(v\d+)</small>', pathlib.Path('docs/index.html').read_text()).group(1)
+modes = re.findall(r'data-mode="([a-z]+)"', pathlib.Path('docs/index.html').read_text())
+assert len(modes) == 21
 
 def run(*args, timeout=180):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, timeout=timeout)
@@ -40,44 +42,54 @@ for device in selected:
             print('Cold boot still pending; rechecking same simulator '+udid, flush=True)
             run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
         run('xcrun', 'simctl', 'install', udid, str(app))
+        container = pathlib.Path(run('xcrun', 'simctl', 'get_app_container', udid, bundle, 'data').strip())
+        documents = container / 'Documents'
+        layout_file = documents / 'layout-evidence.json'
+        print('Launching '+device['name'], flush=True)
+        # This is a fresh device: there is no prior app to terminate.
+        try:
+            launched = run('xcrun', 'simctl', 'launch', udid, bundle, '--offline-suite', '--smoke-evidence', timeout=120)
+        except subprocess.TimeoutExpired:
+            processes = run('xcrun', 'simctl', 'spawn', udid, 'launchctl', 'list', timeout=30)
+            if bundle not in processes: raise
+            launched = 'Launch command timed out; app process verified live'
+        for attempt in range(60):
+            if layout_file.exists(): break
+            time.sleep(1)
+        assert layout_file.exists(), 'App did not produce initial WebKit layout evidence'
+        name = device['name'].replace(' ', '-').replace('(', '').replace(')', '')
         for landscape in [False, True]:
-            container = pathlib.Path(run('xcrun', 'simctl', 'get_app_container', udid, bundle, 'data').strip())
-            layout_file = container / 'Documents' / 'layout-evidence.json'
-            layout_file.unlink(missing_ok=True)
-            arguments = ['--offline-suite', '--smoke-evidence'] + (['--landscape'] if landscape else [])
-            print('Launching '+device['name']+(' landscape' if landscape else ' portrait'), flush=True)
-            subprocess.run(['xcrun', 'simctl', 'terminate', udid, bundle], capture_output=True, timeout=30)
-            try:
-                launched = run('xcrun', 'simctl', 'launch', udid, bundle, *arguments, timeout=90)
-            except subprocess.TimeoutExpired:
-                # A CLI observation timeout is not evidence that the app stopped.
-                processes = run('xcrun', 'simctl', 'spawn', udid, 'launchctl', 'list', timeout=30)
-                if bundle not in processes: raise
-                launched = 'simctl launch observation timed out; app process verified live'
-            time.sleep(6)
-            processes = run('xcrun', 'simctl', 'spawn', udid, 'launchctl', 'list')
-            assert bundle in processes, f'App exited after launch: {device["name"]}: {launched}'
-            name = device['name'].replace(' ', '-').replace('(', '').replace(')', '')
-            screenshot = output / f'{name}-{"landscape" if landscape else "portrait"}.png'
-            run('xcrun', 'simctl', 'io', udid, 'screenshot', str(screenshot))
-            width, height = struct.unpack('>II', screenshot.read_bytes()[16:24])
-            for attempt in range(30):
-                if layout_file.exists(): break
-                time.sleep(1)
-            layout = json.loads(layout_file.read_text())
-            assert layout['modeCount'] == 21 and expected_version in layout['title'], layout
-            viewport = layout['viewport']
-            assert (viewport['width'] > viewport['height']) == landscape, layout
-            assert layout['orientation'] in ([3, 4] if landscape else [1, 2]), layout
-            inset = layout['safeInsets']
-            assert layout['header']['top'] >= inset['top'] + 3, layout
-            assert layout['nav']['bottom'] <= viewport['height'] - inset['bottom'] - 3, layout
-            assert layout['stage']['left'] >= inset['left'] + 3, layout
-            assert layout['stage']['right'] <= viewport['width'] - inset['right'] - 3, layout
-            (output / (screenshot.stem + '.json')).write_text(json.dumps(layout, indent=2))
-            evidence.append({'device': device['name'], 'landscape': landscape,
-                             'pixels': [width, height], 'viewport': viewport, 'file': str(screenshot), 'launch': launched.strip()})
-            (output / 'results.json').write_text(json.dumps(evidence, indent=2))
+            for mode in modes:
+                sequence = ('landscape' if landscape else 'portrait')+'-'+mode
+                (documents / 'smoke-command.json').write_text(json.dumps({'sequence': sequence, 'mode': mode, 'orientation': 'landscape' if landscape else 'portrait'}))
+                layout = None
+                for attempt in range(60):
+                    try:
+                        observed = json.loads(layout_file.read_text())
+                        if observed.get('requestSequence') == sequence:
+                            layout = observed
+                            break
+                    except (OSError, ValueError): pass
+                    time.sleep(.5)
+                assert layout is not None, f'No evidence for {sequence}'
+                assert layout['activeMode'] == mode and layout['modeCount'] == 21 and expected_version in layout['title'], layout
+                viewport = layout['viewport']
+                assert (viewport['width'] > viewport['height']) == landscape, layout
+                assert layout['orientation'] in ([3, 4] if landscape else [1, 2]), layout
+                inset, stage = layout['safeInsets'], layout['stage']
+                top = layout['header']['top'] if layout['header']['height'] else stage['top']
+                bottom = layout['nav']['bottom'] if layout['nav']['height'] else stage['bottom']
+                assert top >= inset['top'] + 3 and bottom <= viewport['height'] - inset['bottom'] - 3, layout
+                assert stage['left'] >= inset['left'] + 3 and stage['right'] <= viewport['width'] - inset['right'] - 3, layout
+                assert abs(layout['app']['width']-viewport['width']) <= 1 and abs(layout['app']['height']-viewport['height']) <= 1, layout
+                assert abs(layout['body']['width']-viewport['width']) <= 1, layout
+                screenshot = output / f'{name}-{sequence}.png'
+                run('xcrun', 'simctl', 'io', udid, 'screenshot', str(screenshot))
+                width, height = struct.unpack('>II', screenshot.read_bytes()[16:24])
+                (output / (screenshot.stem + '.json')).write_text(json.dumps(layout, indent=2))
+                evidence.append({'device': device['name'], 'landscape': landscape, 'mode': mode, 'pixels': [width, height], 'viewport': viewport, 'file': str(screenshot), 'launch': launched.strip()})
+                (output / 'results.json').write_text(json.dumps(evidence, indent=2))
+                print('Verified '+device['name']+' '+sequence, flush=True)
     finally:
         subprocess.run(['xcrun', 'simctl', 'shutdown', udid], check=False, capture_output=True, timeout=45)
         subprocess.run(['xcrun', 'simctl', 'delete', udid], check=False, capture_output=True, timeout=45)
