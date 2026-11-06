@@ -75,7 +75,7 @@
 
   function pointerDown(e){
     if(['ui','menu','type'].includes(mode)) return;
-    if(e.target.closest('.video-sheet'))return;
+    if(mode==='video'&&$('.video-sheet'))return;
     if(e.target.closest('button,input,textarea,select,label') && !e.target.closest('.fire')) return;
     e.preventDefault(); stage.setPointerCapture?.(e.pointerId);
     const p={...pointFromEvent(e),color:palette[Math.abs(e.pointerId)%palette.length],start:performance.now()};
