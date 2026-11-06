@@ -171,9 +171,11 @@ final class NativeSuiteUITests: XCTestCase {
         app.segmentedControls.buttons["布局"].tap()
         app.buttons["移动按钮与菜单"].tap()
         let skill=identified("game-control-skill1"),original=skill.frame
-        let origin=skill.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-        origin.press(forDuration:0.1,thenDragTo:origin.withOffset(CGVector(dx:-28,dy:-24)))
-        wait("Native HUD must move with the drag") {abs(skill.frame.midX-original.midX+28)<3 && abs(skill.frame.midY-original.midY+24)<3}
+        let viewport=app.windows.firstMatch,anchor=viewport.coordinate(withNormalizedOffset:.zero),viewportFrame=viewport.frame
+        let origin=anchor.withOffset(CGVector(dx:original.midX-viewportFrame.minX,dy:original.midY-viewportFrame.minY))
+        let destination=anchor.withOffset(CGVector(dx:original.midX-viewportFrame.minX-28,dy:original.midY-viewportFrame.minY-24))
+        origin.press(forDuration:0.1,thenDragTo:destination)
+        wait("Native HUD must move by the fixed requested delta; before=\(original), after=\(skill.frame), diagnostics=\(metrics.label)") {abs(skill.frame.midX-original.midX+28)<3 && abs(skill.frame.midY-original.midY+24)<3}
         let moved=skill.frame
         app.terminate();launch(mode:"moba")
         wait("Game must return to landscape") {self.app.windows.firstMatch.frame.width>self.app.windows.firstMatch.frame.height}

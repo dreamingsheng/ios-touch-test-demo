@@ -65,6 +65,9 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
     private var feedback = ""
     private var feedbackUntil: CFTimeInterval = 0
     private var jumpUntil: CFTimeInterval = 0
+    // Exposed through diagnostics only in XCTest launches, so a failed gesture
+    // records what UIKit actually received without changing recognition rules.
+    private var layoutTrace: [String] = []
 
     var editingLayout = false {
         didSet {
@@ -75,12 +78,21 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
                 $0.layer.borderWidth = editingLayout ? 1 : 0
                 $0.gestureRecognizers?.forEach { $0.isEnabled = editingLayout }
             }
+            traceLayout("edit=\(editingLayout) enabled=\(controls.values.filter(\.isUserInteractionEnabled).count)")
             setNeedsDisplay()
         }
     }
     var diagnostics: String {
         "触点 \(roles.count) · 最大 \(maximumTouches) · 落指 \(Int(stickOrigin.x)),\(Int(stickOrigin.y)) · 事件 \(eventCount) · 左轴 \(String(format: "%.2f,%.2f", Double(vector.x), Double(vector.y))) · " +
-        (mode == "aim" ? "开火 \(fireCount) · 弹药 \(magazine)/\(reserve) · \(stance)" : "施放 \(skillCount) · 取消 \(cancelledCount)")
+        (mode == "aim" ? "开火 \(fireCount) · 弹药 \(magazine)/\(reserve) · \(stance)" : "施放 \(skillCount) · 取消 \(cancelledCount)") +
+        (layoutTrace.isEmpty ? "" : " · HUD " + layoutTrace.suffix(6).joined(separator:" | "))
+    }
+    private func traceLayout(_ message:String) {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-testing") else { return }
+        layoutTrace.append(message)
+        if layoutTrace.count > 12 { layoutTrace.removeFirst(layoutTrace.count-12) }
+        accessibilityValue = diagnostics
+        print("NativeHUD \(message)")
     }
 
     init(mode: String, assetFolder: URL?) {
@@ -164,6 +176,7 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds.width > 0, bounds.height > 0, bounds.size != lastSize || safeAreaInsets != lastSafe else { return }
+        traceLayout("layout old=\(lastSize) new=\(bounds.size) oldSafe=\(lastSafe) newSafe=\(safeAreaInsets)")
         clearPressed(); lastSize = bounds.size; lastSafe = safeAreaInsets
         let r = safeRect, landscape = bounds.width > bounds.height
         let scale: CGFloat = (landscape && bounds.height < 430 ? 0.86 : (bounds.width < 400 ? 0.88 : 1)) * hudScale
@@ -260,9 +273,13 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
         return CGPoint(x: max(r.minX + size.width / 2, min(r.maxX - size.width / 2, point.x)), y: max(r.minY + size.height / 2, min(r.maxY - size.height / 2, point.y)))
     }
     @objc private func moveControl(_ recognizer: UIPanGestureRecognizer) {
-        guard editingLayout, let control = recognizer.view else { return }
+        guard editingLayout, let control = recognizer.view else { traceLayout("blocked pan state=\(recognizer.state.rawValue) edit=\(editingLayout)"); return }
         let delta = recognizer.translation(in: self)
+        let before = control.center
         control.center = clamp(CGPoint(x: control.center.x + delta.x, y: control.center.y + delta.y), size: control.bounds.size)
+        if recognizer.state == .began || recognizer.state == .ended || recognizer.state == .cancelled {
+            traceLayout("pan \(control.accessibilityIdentifier ?? "?") state=\(recognizer.state.rawValue) location=\(recognizer.location(in:self)) delta=\(delta) center=\(before)->\(control.center)")
+        }
         recognizer.setTranslation(.zero, in: self)
         if recognizer.state == .ended || recognizer.state == .cancelled {
             var stored: [String: [String: Double]] = [:]
@@ -303,7 +320,10 @@ final class NativeGameScene: UIView, NativeSceneLifecycle, NativeResettableScene
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !editingLayout, settingsPanel == nil else { return }
+        guard !editingLayout, settingsPanel == nil else {
+            if editingLayout, let touch = touches.first { traceLayout("edit-touch \(touch.view?.accessibilityIdentifier ?? "?") point=\(touch.location(in:self))") }
+            return
+        }
         startTimer()
         for touch in touches {
             let id = ObjectIdentifier(touch), p = touch.location(in: self)
